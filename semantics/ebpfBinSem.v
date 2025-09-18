@@ -150,19 +150,19 @@ Inductive aluOp : Type :=
   | SUB                   (**r dst -= src *)
   | MUL                   (**r dst *= src *)
   | DIV                   (**r dst /= src *)
-  | SDIV                  (**r dst /= src *)
+  | SDIV                  (**r dst /= src (signed) *)
   | OR                    (**r dst |= src *)
   | AND                   (**r dst &= src *)
   | LSH                   (**r dst <<= src *)
   | RSH                   (**r dst >>= src (unsigned) *)
   | NEG                   (**r dst = ~dst *)
   | MOD                   (**r dst %= src *)
-  | SMOD                  (**r dst %= src *)
+  | SMOD                  (**r dst %= src (signed) *)
   | XOR                   (**r dst ^= src *)
   | MOV                   (**r dst = src *)
-  | MOVSX (c:signExtOp)   (**r dst = src *)
+  | MOVSX (c:signExtOp)   (**r dst = (s8/s16/s32) src *)
   | ARSH                  (**r dst >>= src (signed) *)
-  | END (e:endOp) (s: endSize) (**r dst = bswap(dst) *)
+  | END (e:endOp) (s: endSize) (**r dst = bswap(16/32/64, dst) *)
 .
 
 Inductive cmpOp : Type :=
@@ -328,7 +328,7 @@ Definition eval_reg_immw (w:width) (rs : regset) (ri: ireg+int) : val :=
 
 Definition eval_val_int (w:width)  (ri: val+int) : val :=
   match ri with
-  | inl i =>  i
+  | inl i => i (** we assume each eBPF register is 64-bit: i.e.` Vlong vl` or `Vptr b ofs` *)
   | inr i => match w with
              | W32 => Vint i
              | W64 => Vlong (int64_of_int i)
@@ -336,90 +336,99 @@ Definition eval_val_int (w:width)  (ri: val+int) : val :=
              end
   end.
 
-Definition ebpf_Ext (w:width) (s: signedness) (v: val) : val :=
-  match w, s with
-  | W32, Unsigned => Val.longofintu v
-  | W32, Signed => Val.longofint v
-  | W64, _ => v
-  end.
-
 (** RFC9669: 4.1. Arithmetic Instructions 
       DIV 0x3 0 dst = (src != 0) ? (dst / src) : 0
       SDIV 0x3 1 dst = (src != 0) ? (dst s/ src) : 0
   *)
-Definition ebpf_div_u32 (v1 v2:val) : val :=
+Definition eval_div_u32 (v1 v2:val) : val :=
   match Val.divu v1 v2 with
   | Some res => res
   | None => if Val.eq v2 Vzero then Vzero else Vundef
   end.
 
-Definition ebpf_div_s32 (v1 v2:val) : val :=
+Definition eval_div_s32 (v1 v2:val) : val :=
   match Val.divs v1 v2 with
   | Some res => res
   | None => if Val.eq v2 Vzero then Vzero else Vundef
   end.
 
-Definition ebpf_div_u64 (v1 v2:val) : val :=
+Definition eval_div_u64 (v1 v2:val) : val :=
   match Val.divlu v1 v2 with
   | Some res => res
   | None => if Val.eq v2 (Vlong Int64.zero) then Vlong Int64.zero else Vundef
   end.
 
-Definition ebpf_div_s64 (v1 v2:val) : val :=
+Definition eval_div_s64 (v1 v2:val) : val :=
   match Val.divls v1 v2 with
   | Some res => res
   | None => if Val.eq v2 (Vlong Int64.zero) then Vlong Int64.zero else Vundef
-  end.
-
-Definition eval_div (w:width) (s: signedness) (v1 v2:val) : val :=
-  match w, s with
-  | W64, Unsigned => ebpf_div_u64 v1 v2
-  | W64, Signed   => ebpf_div_s64 v1 v2
-  | W32, Unsigned => ebpf_div_u32 v1 v2
-  | W32, Signed   => ebpf_div_s32 v1 v2
   end.
 
 (** RFC9669: 4.1. Arithmetic Instructions 
       MOD 0x9 0 dst = (src != 0) ? (dst % src) : dst
       SMOD 0x9 1 dst = (src != 0) ? (dst s% src) : dst
   *)
-Definition ebpf_mod_u32 (v1 v2:val) : val :=
+Definition eval_mod_u32 (v1 v2:val) : val :=
   match Val.modu v1 v2 with
   | Some res => res
   | None => if Val.eq v2 Vzero then v1 else Vundef
   end.
 
-Definition ebpf_mod_s32 (v1 v2:val) : val :=
+Definition eval_mod_s32 (v1 v2:val) : val :=
   match Val.mods v1 v2 with
   | Some res => res
   | None => if Val.eq v2 Vzero then v1 else Vundef
   end.
 
-Definition ebpf_mod_u64 (v1 v2:val) : val :=
+Definition eval_mod_u64 (v1 v2:val) : val :=
   match Val.modlu v1 v2 with
   | Some res => res
   | None => if Val.eq v2 (Vlong Int64.zero) then v1 else Vundef
   end.
 
-Definition ebpf_mod_s64 (v1 v2:val) : val :=
+Definition eval_mod_s64 (v1 v2:val) : val :=
   match Val.modls v1 v2 with
   | Some res => res
   | None => if Val.eq v2 (Vlong Int64.zero) then v1 else Vundef
   end.
 
-Definition eval_mod (w:width) (s: signedness) (v1 v2:val) : val :=
-  match w, s with
-  | W64, Unsigned => ebpf_mod_u64 v1 v2
-  | W64, Signed   => ebpf_mod_s64 v1 v2
-  | W32, Unsigned => ebpf_mod_u32 v1 v2
-  | W32, Signed   => ebpf_mod_s32 v1 v2
-  end.
-
-(** RFC9669: 4.1. Arithmetic Instructions
+  (** RFC9669: 4.1. Arithmetic Instructions
       LSH 0x6 0 dst <<= (src & mask)
       RSH 0x7 0 dst >>= (src & mask)
       ARSH 0xc 0 sign extending (Section 2.3) dst >>= (src & mask)
 
+    Note that: In the Coq formalization, we select to do mask for all ebPF shift instruction because the eBPF verifier guarantee the imm-based eBPF shift range checking.
+    
+    - In the core.c, it doesn't require the mask operations for the imm-based eBPF shift
+    ```c
+    // https://elixir.bootlin.com/linux/v6.17-rc4/source/kernel/bpf/core.c#L1790
+    #define SHT(OPCODE, OP)					\
+      ALU64_##OPCODE##_X:				\
+        DST = DST OP (SRC & 63);		\
+        CONT;					\
+      ALU_##OPCODE##_X:				\
+        DST = (u32) DST OP ((u32) SRC & 31);	\
+        CONT;					\
+      ALU64_##OPCODE##_K:				\
+        DST = DST OP IMM;			\
+        CONT;					\
+      ALU_##OPCODE##_K:				\
+        DST = (u32) DST OP (u32) IMM;		\
+        CONT;
+    ``` 
+    - But the verifier.c statically checks the range of imm-based shift value.
+    ```c
+    //https://elixir.bootlin.com/linux/v6.17-rc4/source/kernel/bpf/verifier.c#L15770
+    		if ((opcode == BPF_LSH || opcode == BPF_RSH ||
+		     opcode == BPF_ARSH) && BPF_SRC(insn->code) == BPF_K) {
+			int size = BPF_CLASS(insn->code) == BPF_ALU64 ? 64 : 32;
+
+			if (insn->imm < 0 || insn->imm >= size) {
+				verbose(env, "invalid shift %d\n", insn->imm);
+				return -EINVAL;
+			}
+		}
+    ```
   *)
 Definition eval_shift_mask (w:width) (v1:val) : val :=
   match w with
@@ -497,58 +506,108 @@ Definition eval_end (e:endOp) (s: endSize) (v: val) : val :=
   match v with
   | Vlong vl => Vlong
     match e with
-    | LE32 => if Archi.big_endian then vl else (swapn s) vl
-    | BE32 => if Archi.big_endian then (swapn s) vl else vl
+    | LE32 => if Archi.big_endian then (swapn s) vl else vl
+    | BE32 => if Archi.big_endian then vl else (swapn s) vl
     | LE64 => (swapn s) vl
     end
   | _ => Vundef
   end.
 
 (** Evaluation of [Palu] operands *)
-Definition eval_alu (b: aluOp) (w:width) (v1:val) (v2: val+int) : val :=
+Definition eval_alu32 (b: aluOp) (v1: val) (v2: val+int) : val :=
+  let dst := Val.loword v1 in
+  let src := match v2 with | inl r => Val.loword r | inr i => Vint i end in
+    match b with
+    | ADD   => Val.longofintu (Val.add dst src)
+    | SUB   => Val.longofintu (Val.sub dst src)
+    | MUL   => Val.longofintu (Val.mul dst src)
+    | DIV   => Val.longofintu (eval_div_u32 dst src)
+    | SDIV  => Val.longofint  (eval_div_s32 dst src)
+    | OR    => Val.longofintu (Val.or dst src)
+    | AND   => Val.longofintu (Val.and dst src)
+    | LSH   => Val.longofintu (Val.shl dst (eval_shift_mask W32 src))
+    | RSH   => Val.longofintu (Val.shru dst (eval_shift_mask W32 src))
+    | NEG   => Val.longofintu (Val.neg dst)
+    | MOD   => Val.longofintu (eval_mod_u32 dst src)
+    | SMOD  => Val.longofint  (eval_mod_s32 dst src)
+    | XOR   => Val.longofintu (Val.xor  dst src)
+    | MOV   => Val.longofintu src
+    | MOVSX c => Val.longofint (eval_movsx W32 c src)
+    | ARSH  => Val.longofint  (Val.shr dst (eval_shift_mask W32 src))
+    | END e s => eval_end e s dst
+    end.
+
+Definition eval_alu64 (b: aluOp) (dst: val) (v2: val+int) : val :=
+  let src := eval_val_int W64 v2 in
   match b with
-  | ADD   => ebpf_Ext w Unsigned ((if w then Val.add else Val.addl) v1 (eval_val_int w v2))
-  | SUB   => ebpf_Ext w Unsigned ((if w then Val.sub else Val.subl) v1 (eval_val_int w v2))
-  | MUL   => ebpf_Ext w Unsigned ((if w then Val.mul else Val.mull) v1 (eval_val_int w v2))
-  | DIV   => ebpf_Ext w Unsigned (eval_div w Unsigned v1 (eval_val_int w v2))
-  | SDIV  => ebpf_Ext w Signed   (eval_div w Signed   v1 (eval_val_int w v2))
-  | OR    => ebpf_Ext w Unsigned ((if w then Val.or else Val.orl) v1 (eval_val_int w v2))
-  | AND   => ebpf_Ext w Unsigned ((if w then Val.and else Val.andl) v1 (eval_val_int w v2))
-  | LSH   => ebpf_Ext w Unsigned ((if w then Val.shl else Val.shll) v1 (eval_shift_mask w (eval_val_int W32 v2)))
-  | RSH   => ebpf_Ext w Unsigned ((if w then Val.shru else Val.shrlu) v1 (eval_shift_mask w (eval_val_int W32 v2)))
-  | NEG   => ebpf_Ext w Unsigned ((if w then Val.neg else Val.negl) v1)
-  | MOD   => ebpf_Ext w Unsigned (eval_mod w Unsigned v1 (eval_val_int w v2))
-  | SMOD  => ebpf_Ext w Signed   (eval_mod w Signed   v1 (eval_val_int w v2))
-  | XOR   => ebpf_Ext w Unsigned ((if w then Val.xor else Val.xorl) v1 (eval_val_int w v2))
-  | MOV   => ebpf_Ext w Unsigned (eval_val_int w v2)
-  | MOVSX c => ebpf_Ext w Signed (eval_movsx w c (eval_val_int w v2))
-  | ARSH  => ebpf_Ext w Signed   ((if w then Val.shr else Val.shrl) v1 (eval_shift_mask w (eval_val_int W32 v2)))
-  | END e s => eval_end e s v1
+  | ADD   => Val.addl dst src
+  | SUB   => Val.subl dst src
+  | MUL   => Val.mull dst src
+  | DIV   => eval_div_u64 dst src
+  | SDIV  => eval_div_s64 dst src
+  | OR    => Val.orl dst src
+  | AND   => Val.andl dst src
+  | LSH   => Val.shll dst (eval_shift_mask W64 src)
+  | RSH   => Val.shrlu dst (eval_shift_mask W64 src)
+  | NEG   => Val.negl dst
+  | MOD   => eval_mod_u64 dst src
+  | SMOD  => eval_mod_s64 dst src
+  | XOR   => Val.xorl dst src
+  | MOV   => src
+  | MOVSX c => eval_movsx W64 c src
+  | ARSH  => Val.shrl dst (eval_shift_mask W64 src)
+  | END e s => eval_end e s dst
   end.
 
-(** Evaluation of [Pcmp] and [Pjmpcmp] operands *)
+(** RFC9669: 4.3. Jump Instructions
 
-Definition cmpu (w:width) :=
-  if w then Val.cmpu_bool else Val.cmplu_bool.
+- {END, LE, ALU}
+- {END, BE, ALU}
+- {END, TO, ALU64}
+*)
+Definition eval_cmp32 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+int) : option bool :=
+  let dst := Val.loword (rs#r) in
+  let src := match ri with | inl r => Val.loword (rs#r) | inr i => Vint i end in
+    match op with
+    | EQ          => Val.cmpu_bool (Mem.valid_pointer m) Ceq dst src
+    | GT Signed   => Val.cmp_bool Cgt dst src
+    | GT Unsigned => Val.cmpu_bool (Mem.valid_pointer m) Cgt dst src
+    | GE Signed   => Val.cmp_bool Cge dst src
+    | GE Unsigned => Val.cmpu_bool (Mem.valid_pointer m) Cge dst src
+    | LT Signed   => Val.cmp_bool Clt dst src
+    | LT Unsigned => Val.cmpu_bool (Mem.valid_pointer m) Clt dst src
+    | LE Signed   => Val.cmp_bool Cle dst src
+    | LE Unsigned => Val.cmpu_bool (Mem.valid_pointer m) Cle dst src
+    | SET         => Val.cmpu_bool (Mem.valid_pointer m) Cne (Val.and dst src) (Vint Int.zero)
+    | NE          => Val.cmpu_bool (Mem.valid_pointer m) Cne dst src
+    end.
 
-Definition cmp (w:width) :=
-  if  w then Val.cmp_bool else Val.cmpl_bool.
+Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+int) : option bool :=
+  let dst := rs#r in
+  let src := match ri with | inl r => rs#r | inr i => Vlong (int64_of_int i) end in
+    match op with
+    | EQ          => Val.cmplu_bool (Mem.valid_pointer m) Ceq dst src
+    | GT Signed   => Val.cmpl_bool Cgt dst src
+    | GT Unsigned => Val.cmplu_bool (Mem.valid_pointer m) Cgt dst src
+    | GE Signed   => Val.cmpl_bool Cge dst src
+    | GE Unsigned => Val.cmplu_bool (Mem.valid_pointer m) Cge dst src
+    | LT Signed   => Val.cmpl_bool Clt dst src
+    | LT Unsigned => Val.cmplu_bool (Mem.valid_pointer m) Clt dst src
+    | LE Signed   => Val.cmpl_bool Cle dst src
+    | LE Unsigned => Val.cmplu_bool (Mem.valid_pointer m) Cle dst src
+    | SET         => Val.cmplu_bool (Mem.valid_pointer m) Cne (Val.and dst src) (Vint Int.zero)
+    | NE          => Val.cmplu_bool (Mem.valid_pointer m) Cne dst src
+    end.
 
-  TBC../..
+  (*
+  ../..
+Definition eval_ja32 (rs: regset) (m:mem) (o: off) : regset :=
+  Next (nextinstr (rs#PC <- (rs PC ()))) m.
 
-Definition eval_cmp (op: cmpOp) (w:width) (rs: regset) (m: mem) (r: ireg) (ri: ireg+int) : option bool :=
-  match op with
-  | EQ          => (cmpu w) (Mem.valid_pointer m) Ceq (rs#r) (eval_reg_immw w rs ri)
-  | GT Signed   => (cmp w) Cgt (rs#r) (eval_reg_immw w rs ri)
-  | GT Unsigned => (cmpu w) (Mem.valid_pointer m) Cgt (rs#r) (eval_reg_immw w rs ri)
-  | GE Signed   => (cmp w) Cge (rs#r) (eval_reg_immw w rs ri)
-  | GE Unsigned => (cmpu w) (Mem.valid_pointer m) Cge (rs#r) (eval_reg_immw w rs ri)
-  | LT Signed   => (cmp w) Clt (rs#r) (eval_reg_immw w rs ri)
-  | LT Unsigned => (cmpu w) (Mem.valid_pointer m) Clt (rs#r) (eval_reg_immw w rs ri)
-  | LE Signed   => (cmp w) Cle (rs#r) (eval_reg_immw w rs ri)
-  | LE Unsigned => (cmpu w) (Mem.valid_pointer m) Cle (rs#r) (eval_reg_immw w rs ri)
-  | SET         => (cmpu w) (Mem.valid_pointer m) Cne (Val.and (rs#r) (eval_reg_immw w rs ri)) (Vint Int.zero)
-  | NE          => (cmpu w) (Mem.valid_pointer m) Cne (rs#r) (eval_reg_immw w rs ri)
+Definition eval_ja64 (rs: regset) (m:mem) (i: imm) : regset :=
+  match w with
+  | W32 => eval_cmp32 op rs m r ri
+  | W64 => eval_cmp64 op rs m r ri
   end.
 
 
@@ -613,10 +672,11 @@ Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: reg
   end.
 
 Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (m: mem) :=
-  match eval_alu o w (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) with
-  | None => Stuck
-  | Some v => Next (nextinstr (rs#r <- v)) m
-  end.
+  let alu_f := match w with | W32 => eval_alu32 | W64 => eval_alu64 end in
+    match alu_f o (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) with
+    | None => Stuck
+    | Some v => Next (nextinstr (rs#r <- v)) m
+    end.
 
 Definition exec_cmp (r: ireg) (rs: regset) (m: mem) (res: option bool) :=
   Next (nextinstr (rs#r <- (Val.of_optbool res))) m.
