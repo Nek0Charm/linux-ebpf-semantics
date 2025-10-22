@@ -16,7 +16,7 @@ types of function definition, variable information (e.g. Clight types), and glob
 - [init_core]: initialize runtime core w.r.t. an entry and arguments, used on thread creation or external calls
 - [halt]: core halts, a returning value is also required for supporting external calls
 - [step]: internal steps of the core
-- [at_external]: genrates events (EntAtom/ExtAtom/Print or an external callwith arguments) and yield control
+- [at_external]: generates events (EntAtom/ExtAtom/Print or an external callwith arguments) and yield control
 The EnvAtom/ExtAtom/Print events are encoded as special external functions with fixed function idents defined in GAST.v
 - [after_external]: get back control, a returning value is required for supporting external calls
 - [internal_fn]: generate a function table (for generaing function-module mapping), we need an interface for internal function list 

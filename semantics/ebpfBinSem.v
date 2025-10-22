@@ -1,14 +1,4 @@
-(* *********************************************************************)
-(*                                                                     *)
-(*              The Compcert verified compiler                         *)
-(*                                                                     *)
-(*                  Xavier Leroy, INRIA Paris                          *)
-(*                                                                     *)
-(*  Copyright Institut National de Recherche en Informatique et en     *)
-(*  Automatique.  All rights reserved.  This file is distributed       *)
-(*  under the terms of the INRIA Non-Commercial License Agreement.     *)
-(*                                                                     *)
-(* *********************************************************************)
+From Coq Require Import List.
 
 (** Abstract syntax and semantics for RISC-V assembly language. *)
 
@@ -21,6 +11,8 @@ From compcert Require Import Conventions Events Smallstep.
 From compcert Require Stacklayout.
 From compcert Require Import Op.
 
+Import ListNotations.
+
 (** * Abstract syntax *)
 
 (** Registers. *)
@@ -30,6 +22,10 @@ Inductive ireg: Type := R0 | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 | R10.
 
 Lemma ireg_eq: forall (x y: ireg), {x=y} + {x<>y}.
 Proof. decide equality. Defined.
+
+
+Definition caller_saved_registers: list ireg := [R1; R2; R3; R4; R5].
+Definition callee_saved_registers: list ireg := [R6; R7; R8; R9].
 
 
 (** We model the following registers of the eBPF architecture. *)
@@ -174,21 +170,47 @@ Inductive cmpOp : Type :=
   | LT: signedness -> cmpOp  (**r e1 <  e2 *)
   | LE: signedness -> cmpOp. (**r e1 <= e2 *)
 
+(***
+  CALL      0x8    0x0      call helper function by static ID  {CALL, K, JMP} only, see `Helper functions`_
+  CALL      0x8    0x1      call PC += imm                     {CALL, K, JMP} only, see `Program-local functions`_
+  CALL      0x8    0x2      call helper function by BTF ID     {CALL, K, JMP} only, see `Helper functions`_
+*)
+Inductive call_type : Type :=
+  | CallByStaticID
+  | CallInternal
+  | CallByBTF.
+
+(***
+  ADD       0x00   atomic add
+  OR        0x40   atomic or
+  AND       0x50   atomic and
+  XOR       0xa0   atomic xor
+*)
+Inductive atomic_type : Type :=
+  | AtomicADD
+  | AtomicOR
+  | AtomicAND
+  | AtomicXOR.
 
 Inductive instruction : Type :=
-  | Pmov  : forall (dst:ireg) (lo:imm) (hi:imm), instruction   (** dst = lo | (hi <<32) *)
-  | Pload : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction        (** dst = * (size) (src + offset) *)
-  | Pstore : forall (sz:sizeOp) (dst:ireg) (src:ireg+imm) (offset:off), instruction   (**r * (size) (dst + offset) = src *)
-  | Palu : forall (o:aluOp) (w:width) (r:ireg) (a:ireg+imm), instruction    (**r arithmetics *)
-  | Pcmp : forall (o:cmpOp) (w:width) (r:ireg) (a:ireg+imm), instruction             (**r comparison without branching: eBPF extension *)
-  | Pjmp : forall (offset:off), instruction                           (**r unconditional jump *)
-  | Pjmpcmp : forall (o:cmpOp) (w:width) (r:ireg) (a:ireg+imm) (offset:off), instruction (**r conditional jump with comparison *)
-  | Pcall : forall (immediate: imm), instruction              (**r function call *)
-  | Pret : instruction                                          (**r function return *)
+  | Plddw  : forall (dst:ireg) (lo:imm) (hi:imm), instruction                             (**r dst = lo | (hi <<32) *)
+
+  | Pload : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = * (size) (src + offset) *)
+  | Pstore : forall (sz:sizeOp) (dst:ireg) (src:ireg+imm) (offset:off), instruction       (**r * (size) (dst + offset) = src *)
+
+  | Patomic: forall (aty: atomic_type) (w:width), instruction                             (**r atomic instructions *)
+
+  | Palu : forall (o:aluOp) (w:width) (r:ireg) (a:ireg+imm), instruction                  (**r arithmetics *)
+
+  | Pjmp32 : forall (immediate:imm), instruction                                          (**r 32-bit unconditional jump *)
+  | Pjmp64 : forall (offset:off), instruction                                             (**r 64-bit unconditional jump *)
+  | Pjmpcmp : forall (o:cmpOp) (w:width) (r:ireg) (a:ireg+imm) (offset:off), instruction  (**r conditional jump with comparison *)
+  | Pcall : forall (cty: call_type) (immediate: imm), instruction                         (**r function call *)
+  | Pret : instruction                                                                    (**r function return *)
 .
 
 
-Definition code := list instruction.
+Definition code := list byte (*instruction *).
 Record function : Type := mkfunction {fn_sig: signature; fn_stksz: Z; fn_code: code}.
 Definition fundef := AST.fundef function.
 Definition program := AST.program fundef unit.
@@ -239,12 +261,14 @@ Fixpoint set_res (res: builtin_res preg) (v: val) (rs: regset) : regset :=
 Section RELSEM.
 
 (** Looking up instructions in a code sequence by position. *)
+Variable find_instr: Z -> code -> option instruction.
 
+(*
 Fixpoint find_instr (pos: Z) (c: code) {struct c} : option instruction :=
   match c with
   | nil => None
   | i :: il => if zeq pos 0 then Some i else find_instr (pos - 1) il
-  end.
+  end. *)
 
   (*
 (** Position corresponding to a label *)
@@ -273,6 +297,10 @@ Fixpoint label_pos (lbl: label) (pos: Z) (c: code) {struct c} : option Z :=
 
 Variable ge: genv.
 
+(**r give an immediate number for function ID, plus R1-R5 values as well as the current memory,
+  returns a value for R0 and a new mem *)
+Variable helper_function: imm -> val -> val -> val -> val -> val -> mem -> val * mem.
+
 
 (** The semantics is purely small-step and defined as a function
   from the current state (a register set + a memory state)
@@ -287,7 +315,6 @@ Inductive outcome : Type :=
 
 (** Manipulations over the [PC] register: continuing with the next
   instruction ([nextinstr]) or branching to a label ([goto_label]). *)
-
 Definition nextinstr (rs: regset) :=
   rs#PC <- (Val.offset_ptr rs#PC Ptrofs.one).
 
@@ -339,7 +366,15 @@ Definition eval_val_int (w:width)  (ri: val+int) : val :=
 (** RFC9669: 4.1. Arithmetic Instructions 
       DIV 0x3 0 dst = (src != 0) ? (dst / src) : 0
       SDIV 0x3 1 dst = (src != 0) ? (dst s/ src) : 0
+
+    fix: linux-doc-bpf
+      DIV    0x3    0        dst = (src != 0) ? (dst / src) : 0
+      SDIV   0x3    1        dst = (src == 0) ? 0 : ((src == -1 && dst == LLONG_MIN) ? LLONG_MIN : (dst s/ src))
   *)
+  
+Definition LLONG_MIN := Vlong (Int64.repr Int64.min_signed).
+Definition INT_MIN := Vint (Int.repr Int.min_signed).
+
 Definition eval_div_u32 (v1 v2:val) : val :=
   match Val.divu v1 v2 with
   | Some res => res
@@ -349,7 +384,10 @@ Definition eval_div_u32 (v1 v2:val) : val :=
 Definition eval_div_s32 (v1 v2:val) : val :=
   match Val.divs v1 v2 with
   | Some res => res
-  | None => if Val.eq v2 Vzero then Vzero else Vundef
+  | None =>
+    if Val.eq v2 Vzero then Vzero
+    else if (Val.eq v2 (Vint Int.mone)) && (Val.eq v1 INT_MIN) then INT_MIN
+    else Vundef
   end.
 
 Definition eval_div_u64 (v1 v2:val) : val :=
@@ -361,12 +399,19 @@ Definition eval_div_u64 (v1 v2:val) : val :=
 Definition eval_div_s64 (v1 v2:val) : val :=
   match Val.divls v1 v2 with
   | Some res => res
-  | None => if Val.eq v2 (Vlong Int64.zero) then Vlong Int64.zero else Vundef
+  | None =>
+    if Val.eq v2 (Vlong Int64.zero) then  Vlong Int64.zero
+    else if (Val.eq v2 (Vlong Int64.mone)) && (Val.eq v1 LLONG_MIN) then LLONG_MIN 
+    else Vundef 
   end.
 
 (** RFC9669: 4.1. Arithmetic Instructions 
       MOD 0x9 0 dst = (src != 0) ? (dst % src) : dst
       SMOD 0x9 1 dst = (src != 0) ? (dst s% src) : dst
+
+    fix: linux-doc-bpf
+      MOD    0x9    0        dst = (src != 0) ? (dst % src) : dst
+      SMOD   0x9    1        dst = (src == 0) ? dst : ((src == -1 && dst == LLONG_MIN) ? 0: (dst s% src))
   *)
 Definition eval_mod_u32 (v1 v2:val) : val :=
   match Val.modu v1 v2 with
@@ -377,7 +422,10 @@ Definition eval_mod_u32 (v1 v2:val) : val :=
 Definition eval_mod_s32 (v1 v2:val) : val :=
   match Val.mods v1 v2 with
   | Some res => res
-  | None => if Val.eq v2 Vzero then v1 else Vundef
+  | None =>
+    if Val.eq v2 Vzero then v1 
+    else if (Val.eq v2 (Vint Int.mone)) && (Val.eq v1 INT_MIN) then Vzero
+    else Vundef
   end.
 
 Definition eval_mod_u64 (v1 v2:val) : val :=
@@ -389,7 +437,10 @@ Definition eval_mod_u64 (v1 v2:val) : val :=
 Definition eval_mod_s64 (v1 v2:val) : val :=
   match Val.modls v1 v2 with
   | Some res => res
-  | None => if Val.eq v2 (Vlong Int64.zero) then v1 else Vundef
+  | None =>
+    if Val.eq v2 (Vlong Int64.zero) then v1
+    else if (Val.eq v2 (Vlong Int64.mone)) && (Val.eq v1 LLONG_MIN) then Vlong Int64.zero
+    else Vundef
   end.
 
   (** RFC9669: 4.1. Arithmetic Instructions
@@ -442,7 +493,7 @@ Definition eval_shift_mask (w:width) (v1:val) : val :=
   *)
 Definition eval_movsx (w:width) (c: signExtOp) (v2 :val) : val :=
   match w with
-  | W32 => Val.sign_ext (signExtOp2Z c) v2
+  | W32 => Val.longofintu (Val.sign_ext (signExtOp2Z c) v2)
   | W64 => Val.sign_ext_l (signExtOp2Z c) v2
   end.
 
@@ -532,8 +583,8 @@ Definition eval_alu32 (b: aluOp) (v1: val) (v2: val+int) : val :=
     | SMOD  => Val.longofint  (eval_mod_s32 dst src)
     | XOR   => Val.longofintu (Val.xor  dst src)
     | MOV   => Val.longofintu src
-    | MOVSX c => Val.longofint (eval_movsx W32 c src)
-    | ARSH  => Val.longofint  (Val.shr dst (eval_shift_mask W32 src))
+    | MOVSX c => eval_movsx W32 c src
+    | ARSH  => Val.longofintu (Val.shr dst (eval_shift_mask W32 src))
     | END e s => eval_end e s dst
     end.
 
@@ -559,13 +610,32 @@ Definition eval_alu64 (b: aluOp) (dst: val) (v2: val+int) : val :=
   | END e s => eval_end e s dst
   end.
 
+Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (m: mem) :=
+  let alu_f := match w with | W32 => eval_alu32 | W64 => eval_alu64 end in
+  let v := alu_f o (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) in
+    Next (nextinstr (rs#r <- v)) m.
+
 (** RFC9669: 4.3. Jump Instructions
 
-- {END, LE, ALU}
-- {END, BE, ALU}
-- {END, TO, ALU64}
+  ========  =====  =======  =================================  ===================================================
+  code      value  src_reg  description                        notes
+  ========  =====  =======  =================================  ===================================================
+  JA        0x0    0x0      PC += offset                       {JA, K, JMP} only
+  JA        0x0    0x0      PC += imm                          {JA, K, JMP32} only
+  JEQ       0x1    any      PC += offset if dst == src
+  JGT       0x2    any      PC += offset if dst > src          unsigned
+  JGE       0x3    any      PC += offset if dst >= src         unsigned
+  JSET      0x4    any      PC += offset if dst & src
+  JNE       0x5    any      PC += offset if dst != src
+  JSGT      0x6    any      PC += offset if dst > src          signed
+  JSGE      0x7    any      PC += offset if dst >= src         signed
+  JLT       0xa    any      PC += offset if dst < src          unsigned
+  JLE       0xb    any      PC += offset if dst <= src         unsigned
+  JSLT      0xc    any      PC += offset if dst < src          signed
+  JSLE      0xd    any      PC += offset if dst <= src         signed
+  ========  =====  =======  =================================  ===================================================
 *)
-Definition eval_cmp32 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+int) : option bool :=
+Definition eval_cmp32 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+imm) : option bool :=
   let dst := Val.loword (rs#r) in
   let src := match ri with | inl r => Val.loword (rs#r) | inr i => Vint i end in
     match op with
@@ -582,7 +652,7 @@ Definition eval_cmp32 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+int)
     | NE          => Val.cmpu_bool (Mem.valid_pointer m) Cne dst src
     end.
 
-Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+int) : option bool :=
+Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+imm) : option bool :=
   let dst := rs#r in
   let src := match ri with | inl r => rs#r | inr i => Vlong (int64_of_int i) end in
     match op with
@@ -599,17 +669,23 @@ Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+int)
     | NE          => Val.cmplu_bool (Mem.valid_pointer m) Cne dst src
     end.
 
-  (*
-  ../..
-Definition eval_ja32 (rs: regset) (m:mem) (o: off) : regset :=
-  Next (nextinstr (rs#PC <- (rs PC ()))) m.
+Definition exec_jmp32 (i: imm) (rs: regset) (m:mem) :=
+  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)))) m.
 
-Definition eval_ja64 (rs: regset) (m:mem) (i: imm) : regset :=
-  match w with
-  | W32 => eval_cmp32 op rs m r ri
-  | W64 => eval_cmp64 op rs m r ri
+Definition exec_jmp64 (o: off) (rs: regset) (m:mem) :=
+  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) m.
+
+Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (m:mem) :=
+  match
+    match w with
+    | W32 => eval_cmp32 op rs m r ri
+    | W64 => eval_cmp64 op rs m r ri
+    end with
+  | None => Stuck
+  | Some cond => 
+    let rs' := if cond then rs#PC <- (Val.offset_ptr (rs PC) o) else rs in
+      Next (nextinstr rs') m
   end.
-
 
 (** Auxiliaries for memory accesses *)
 
@@ -622,20 +698,33 @@ Definition eval_ja64 (rs: regset) (m:mem) (i: imm) : regset :=
   end.
  *)
 
+ (** The global memory model for all eBPF programs, it splits into:
+ - local memory, like eBPF stack or program-local array, only accessed by eBPF load/store instructions
+ - shared memory, like map, hashmap, only accessed by eBPF atomic instructions
+ *)
+Record gmem := {
+  m: mem; (** the CompCert memory model *)
+  local_blks: list block; (** eBPF stack + context + ... *)
+  (* share_blks: list block; (** eBPF map + ... *) *)
+  mtest: memory_chunk -> mem -> block -> Z -> bool; (** simular to load/store, 
+    check the specified region (val, chunk) in the shared memory whether the race-condition occurs *)
+  local_blks_wf: forall m b, List.In b local_blks -> Mem.valid_block m b;  (** local blocks are valid in the memory *)
+  (*share_blks_wf: forall m b, List.In b share_blks -> Mem.valid_block m b;  (** share blocks are valid in the memory *)
+  share_local_disjoint: forall b, List.In b share_blks <-> ~(List.In b local_blks);  (** share blocks and local blocks are disjoint *)
+  mtest_wf: forall mc m b ofs res,   (** if a block is shared (i.e. not local) and valid in the memory, mtest returns *)
+    mtest mc m b ofs = res ->
+      Mem.valid_pointer m b ofs = true /\ List.In b share_blks; *)
+  mtest_wf: forall mc m b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
+    mtest mc m b ofs = res ->
+      Mem.valid_pointer m b ofs = true /\ ~(List.In b local_blks);
+}.
+
 Definition load (k: sizeOp) (addr:val) (m:mem) :=
   match k with
   | Byte => Mem.loadv Mint8unsigned m addr
   | HalfWord => Mem.loadv Mint16unsigned m addr
   | Word     => Mem.loadv Mint32 m addr
-  | WordAny  => Mem.loadv Many32 m addr
-  | SignedWord => if Archi.ptr64
-                  then match Mem.loadv Mint32 m addr with
-                       | None => None
-                       | Some v => Some (Val.longofint v)
-                       end
-                  else None
   | DBWord     => if Archi.ptr64 then Mem.loadv Mint64 m addr else None
-  | DBWordAny  => if Archi.ptr64 then Mem.loadv Many64 m addr else None
   end.
 
 Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (m:mem) :=
@@ -644,26 +733,13 @@ Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) 
   | Some v => Next (nextinstr (rs#r <- v)) m
   end.
 
-
-Definition cast_long_int (v:val) : val :=
-  match v with
-  | Vlong l => Vint (Int.repr (Int64.unsigned l))
-  | _       => Vundef
-  end.
-
-
-
 Definition store (k: sizeOp) (addr:val) (v:val) (m:mem) :=
   match k with
   | Byte => Mem.storev Mint8unsigned m addr v
   | HalfWord => Mem.storev Mint16unsigned m addr v
   | Word     => Mem.storev Mint32 m addr v
-  | WordAny  => Mem.storev Many32 m addr v
-  | SignedWord => if Archi.ptr64 then Mem.storev Mint32 m addr (cast_long_int v) else None
   | DBWord     => if Archi.ptr64 then Mem.storev Mint64 m addr v else None
-  | DBWordAny  => if Archi.ptr64 then Mem.storev Many64 m addr v else None
   end.
-
 
 Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: regset) (m:mem) :=
   match store  k (Val.offset_ptr rs#r o) (eval_reg_immw (sizew k) rs ri) m with
@@ -671,43 +747,16 @@ Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: reg
   | Some m' => Next (nextinstr rs) m'
   end.
 
-Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (m: mem) :=
-  let alu_f := match w with | W32 => eval_alu32 | W64 => eval_alu64 end in
-    match alu_f o (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) with
-    | None => Stuck
-    | Some v => Next (nextinstr (rs#r <- v)) m
+Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (m:mem) :=
+  let v := Vlong (Int64.ofwords hi  lo) in
+    Next (nextinstr (nextinstr (rs#r <- v))) m.
+
+Definition undef_caller_save_regs (rs: regset) : regset :=
+  fun r =>
+    match r with
+    | R6 | R7 | R8 | R9 | R10 => rs r
+    | _ => Vundef
     end.
-
-Definition exec_cmp (r: ireg) (rs: regset) (m: mem) (res: option bool) :=
-  Next (nextinstr (rs#r <- (Val.of_optbool res))) m.
-
-Definition exec_branch (f: function) (l: label) (rs: regset) (m: mem) (res: option bool) : outcome :=
-  match res with
-  | Some true  => goto_label f l rs m
-  | Some false => Next (nextinstr rs) m
-  | None => Stuck
-  end.
-
-
-Definition stack_offset (z:Z) :=
-  Ptrofs.repr (z - 2 * 8).
-
-Definition stack_size_of_ra (ra:val) : option Z :=
-  match ra with
-  | Vptr stk _ =>
-      match Genv.find_funct_ptr ge stk  with
-      | Some (Internal f) => Some f.(fn_stksz)
-      | _                 => None
-      end
-  | _   => None
-  end.
-
-Definition offset_ptr (v:val) (o:option Z) :=
-  match o with
-  | None => v
-  | Some o' => Val.offset_ptr v (stack_offset o')
-  end.
-
 
 
 (** Execution of a single instruction [i] in initial state
@@ -719,60 +768,25 @@ Definition offset_ptr (v:val) (o:option Z) :=
 
 Definition exec_instr (f: function) (i: instruction) (rs:regset) (m: mem) : outcome :=
   match i with
-  | Pmov r v        => Next (nextinstr (rs#r <- (Vlong v))) m
+  | Plddw r lo hi       => exec_lddw r lo hi rs m
   | Pload k r r' o   => exec_load k r r' o rs m
   | Pstore k r ri o  => exec_store k r ri o rs m
   | Palu o w r ri      => exec_alu o w r ri rs m
-  | Pcmp o w r ri      => exec_cmp r rs m (eval_cmp o w rs m r ri)
-  | Pjmp (inl l)     => goto_label f l rs m
-  | Pjmp (inr id)    => Next (rs#PC <- (Genv.symbol_address ge id Ptrofs.zero)) m
-  | Pjmpcmp o w r ri l => exec_branch f l rs m (eval_cmp o w rs m r ri)
+  | Pjmp32 o     => exec_jmp32 o rs m
+  | Pjmp64 i     => exec_jmp64 i rs m
+  | Pjmpcmp op w r ri o => exec_jmpcmp w op r ri o rs m (*
+  | Pcall CallInternal i => exec_call_internal i rs m *)
+  
+  (*
   | Pcall (inr s) sg => Next (rs#RA <- (Val.offset_ptr rs#PC Ptrofs.one)
                                 #PC <- (Genv.symbol_address ge s Ptrofs.zero)
                           ) m
-  | Pcall (inl r) sg => Next (rs#RA <- (Val.offset_ptr rs#PC Ptrofs.one)
-                               #PC  <- (rs#r)) m
-  | Pret             => Next (rs#PC <- (rs#RA)) m
-
-  (** Pseudo-instructions *)
-  | Pallocframe sz ofs_ra ofs_link =>
-      let (m1, stk) := Mem.alloc m 0 sz in
-      let bp := (Vptr stk Ptrofs.zero) in
-      let sp := Val.offset_ptr bp (stack_offset sz) in
-      match Mem.storev Mptr m1 (Val.offset_ptr bp ofs_link) rs#BP with
-      | None => Stuck
-      | Some m2 =>
-          match Mem.storev Mptr m2 (Val.offset_ptr bp ofs_ra) rs#RA with
-          | None => Stuck
-          | Some m3 => Next (nextinstr (rs #R10 <- sp #BP <- bp)) m3
-          end
-      end
-
-  | Pfreeframe sz ofs_ra ofs_link =>
-      match Mem.loadv Mptr m (Val.offset_ptr rs#BP ofs_ra) with
-      | None => Stuck
-      | Some ra =>
-          match Mem.loadv Mptr m (Val.offset_ptr rs#BP ofs_link) with
-          | None => Stuck
-          | Some bp =>
-              match rs#BP with
-              | Vptr stk ofs =>
-                  match Mem.free m stk 0 sz with
-                  | None => Stuck
-                  | Some m' =>
-                      let sz' := stack_size_of_ra ra in
-                      let sp := offset_ptr bp sz' in
-                      Next (nextinstr (rs#R10 <- sp #BP <- bp #RA <- ra)) m'
-                  end
-              |  _   => Stuck
-              end
-          end
-      end
-
-  | Plabel l         => Next (nextinstr rs) m
-  | Ploadsymbol rd s ofs => Next (nextinstr (rs#rd <- (Genv.symbol_address ge s ofs))) m
+  | Pcall cty imm => Next (rs#RA <- (Val.offset_ptr rs#PC Ptrofs.one)
+                               #PC  <- (rs#r)) m *)
+  | Pret             => Next rs m
   | _                => Stuck
   end.
+
 
 (** Undefine all registers except SP, BP and callee-save registers *)
 (*
