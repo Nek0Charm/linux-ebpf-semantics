@@ -226,8 +226,8 @@ Definition dummy_function := mkfunction signature_main 0 nil. *)
   type [Tint], float registers to values of type [Tfloat],
   and condition bits to either [Vzero] or [Vone]. *)
 
-Definition regset := Pregmap.t val.
-Definition genv := Genv.t fundef unit.
+Definition regset := Pregmap.t val. (*
+Definition genv := Genv.t fundef unit. *)
 
 Notation "a # b" := (a b) (at level 1, only parsing) : asm.
 Notation "a # b <- c" := (Pregmap.set b c a) (at level 1, b at next level) : asm.
@@ -295,13 +295,18 @@ Fixpoint label_pos (lbl: label) (pos: Z) (c: code) {struct c} : option Z :=
   end.
 *)
 
-Variable ge: genv.
+(*
+Variable ge: genv. *)
 
-(**r give an immediate number for function ID, plus R1-R5 values as well as the current memory,
-  returns a value for R0 and a new mem *)
-Variable helper_function: imm -> val -> val -> val -> val -> val -> mem -> val * mem.
+Record cstk' := mk_cstk' {
+  stk_ra: val;
+  stk_r6: val;
+  stk_r7: val;
+  stk_r8: val;
+  stk_r9: val;  
+}.
 
-
+Definition cstk := list cstk'.
 (** The semantics is purely small-step and defined as a function
   from the current state (a register set + a memory state)
   to either [Next rs' m'] where [rs'] and [m'] are the updated register
@@ -309,8 +314,13 @@ Variable helper_function: imm -> val -> val -> val -> val -> val -> mem -> val *
   or [Stuck] if the processor is stuck. *)
 
 Inductive outcome : Type :=
-  | Next: regset -> mem -> outcome
+  | Next: regset -> cstk -> mem -> outcome
+  | Stop: val -> outcome
   | Stuck: outcome.
+
+(**r give an immediate number for function ID, plus R1-R5 values as well as the current memory,
+  returns a value for R0 and a new mem *)
+Variable ebpf_call_function: imm -> val -> val -> val -> val -> val -> outcome -> option val.
 
 
 (** Manipulations over the [PC] register: continuing with the next
@@ -610,10 +620,10 @@ Definition eval_alu64 (b: aluOp) (dst: val) (v2: val+int) : val :=
   | END e s => eval_end e s dst
   end.
 
-Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (m: mem) :=
+Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (c_stk: cstk) (m: mem) :=
   let alu_f := match w with | W32 => eval_alu32 | W64 => eval_alu64 end in
   let v := alu_f o (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) in
-    Next (nextinstr (rs#r <- v)) m.
+    Next (nextinstr (rs#r <- v)) c_stk m.
 
 (** RFC9669: 4.3. Jump Instructions
 
@@ -669,13 +679,13 @@ Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+imm)
     | NE          => Val.cmplu_bool (Mem.valid_pointer m) Cne dst src
     end.
 
-Definition exec_jmp32 (i: imm) (rs: regset) (m:mem) :=
-  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)))) m.
+Definition exec_jmp32 (i: imm) (rs: regset) (c_stk: cstk) (m:mem) :=
+  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)))) c_stk m.
 
-Definition exec_jmp64 (o: off) (rs: regset) (m:mem) :=
-  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) m.
+Definition exec_jmp64 (o: off) (rs: regset) (c_stk: cstk) (m:mem) :=
+  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) c_stk m.
 
-Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (m:mem) :=
+Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (c_stk: cstk) (m:mem) :=
   match
     match w with
     | W32 => eval_cmp32 op rs m r ri
@@ -684,7 +694,7 @@ Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) 
   | None => Stuck
   | Some cond => 
     let rs' := if cond then rs#PC <- (Val.offset_ptr (rs PC) o) else rs in
-      Next (nextinstr rs') m
+      Next (nextinstr rs') c_stk m
   end.
 
 (** Auxiliaries for memory accesses *)
@@ -698,26 +708,6 @@ Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) 
   end.
  *)
 
- (** The global memory model for all eBPF programs, it splits into:
- - local memory, like eBPF stack or program-local array, only accessed by eBPF load/store instructions
- - shared memory, like map, hashmap, only accessed by eBPF atomic instructions
- *)
-Record gmem := {
-  m: mem; (** the CompCert memory model *)
-  local_blks: list block; (** eBPF stack + context + ... *)
-  (* share_blks: list block; (** eBPF map + ... *) *)
-  mtest: memory_chunk -> mem -> block -> Z -> bool; (** simular to load/store, 
-    check the specified region (val, chunk) in the shared memory whether the race-condition occurs *)
-  local_blks_wf: forall m b, List.In b local_blks -> Mem.valid_block m b;  (** local blocks are valid in the memory *)
-  (*share_blks_wf: forall m b, List.In b share_blks -> Mem.valid_block m b;  (** share blocks are valid in the memory *)
-  share_local_disjoint: forall b, List.In b share_blks <-> ~(List.In b local_blks);  (** share blocks and local blocks are disjoint *)
-  mtest_wf: forall mc m b ofs res,   (** if a block is shared (i.e. not local) and valid in the memory, mtest returns *)
-    mtest mc m b ofs = res ->
-      Mem.valid_pointer m b ofs = true /\ List.In b share_blks; *)
-  mtest_wf: forall mc m b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
-    mtest mc m b ofs = res ->
-      Mem.valid_pointer m b ofs = true /\ ~(List.In b local_blks);
-}.
 
 Definition load (k: sizeOp) (addr:val) (m:mem) :=
   match k with
@@ -727,10 +717,10 @@ Definition load (k: sizeOp) (addr:val) (m:mem) :=
   | DBWord     => if Archi.ptr64 then Mem.loadv Mint64 m addr else None
   end.
 
-Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (m:mem) :=
+Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m:mem) :=
   match load k (Val.offset_ptr rs#r' o) m with
   | None => Stuck
-  | Some v => Next (nextinstr (rs#r <- v)) m
+  | Some v => Next (nextinstr (rs#r <- v)) c_stk m
   end.
 
 Definition store (k: sizeOp) (addr:val) (v:val) (m:mem) :=
@@ -741,23 +731,56 @@ Definition store (k: sizeOp) (addr:val) (v:val) (m:mem) :=
   | DBWord     => if Archi.ptr64 then Mem.storev Mint64 m addr v else None
   end.
 
-Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: regset) (m:mem) :=
+Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m:mem) :=
   match store  k (Val.offset_ptr rs#r o) (eval_reg_immw (sizew k) rs ri) m with
   | None => Stuck
-  | Some m' => Next (nextinstr rs) m'
+  | Some m' => Next (nextinstr rs) c_stk m'
   end.
 
-Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (m:mem) :=
+Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (c_stk: cstk) (m:mem) :=
   let v := Vlong (Int64.ofwords hi  lo) in
-    Next (nextinstr (nextinstr (rs#r <- v))) m.
+    Next (nextinstr (nextinstr (rs#r <- v))) c_stk m.
 
+(** Undefine all ebpf caller-saved registers: i.e. R1 to R5 *)
 Definition undef_caller_save_regs (rs: regset) : regset :=
   fun r =>
     match r with
-    | R6 | R7 | R8 | R9 | R10 => rs r
+    | R1 | R2 | R3 | R4 | R5 => Vundef
+    | _ => rs r
+    end.
+
+(** Undefine all ebpf registers except caller-saved registers: i.e. R1 to R5 *)
+Definition def_caller_save_regs (rs: regset) : regset :=
+  fun r =>
+    match r with
+    | R1 | R2 | R3 | R4 | R5 => rs r
     | _ => Vundef
     end.
 
+Definition exec_call_internal (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
+  let n_stk := {|
+  stk_ra := Val.offset_ptr rs#PC Ptrofs.one;
+  stk_r6 := rs R6;
+  stk_r7 := rs R7;
+  stk_r8 := rs R8;
+  stk_r9 := rs R9;  
+|} :: c_stk in
+  Next
+    (def_caller_save_regs rs)
+      #PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)) n_stk m.
+
+Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
+  match c_stk with
+  | [] => Stop (rs R0)  (**r rs#R0 includes the return value *)
+  | h :: tl_stk =>
+    Next
+      (undef_caller_save_regs rs)
+      #PC <- (stk_ra h)
+      #R6 <- (stk_r6 h)
+      #R7 <- (stk_r7 h)
+      #R8 <- (stk_r8 h)
+      #R9 <- (stk_r9 h) tl_stk m
+  end.
 
 (** Execution of a single instruction [i] in initial state
     [rs] and [m].  Return updated state.  For instructions
@@ -766,25 +789,18 @@ Definition undef_caller_save_regs (rs: regset) : regset :=
     given in the eBPF reference manuals.  For pseudo-instructions,
     refer to the informal descriptions given above. *)
 
-Definition exec_instr (f: function) (i: instruction) (rs:regset) (m: mem) : outcome :=
+Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem) : outcome :=
   match i with
-  | Plddw r lo hi       => exec_lddw r lo hi rs m
-  | Pload k r r' o   => exec_load k r r' o rs m
-  | Pstore k r ri o  => exec_store k r ri o rs m
-  | Palu o w r ri      => exec_alu o w r ri rs m
-  | Pjmp32 o     => exec_jmp32 o rs m
-  | Pjmp64 i     => exec_jmp64 i rs m
-  | Pjmpcmp op w r ri o => exec_jmpcmp w op r ri o rs m (*
-  | Pcall CallInternal i => exec_call_internal i rs m *)
-  
-  (*
-  | Pcall (inr s) sg => Next (rs#RA <- (Val.offset_ptr rs#PC Ptrofs.one)
-                                #PC <- (Genv.symbol_address ge s Ptrofs.zero)
-                          ) m
-  | Pcall cty imm => Next (rs#RA <- (Val.offset_ptr rs#PC Ptrofs.one)
-                               #PC  <- (rs#r)) m *)
-  | Pret             => Next rs m
-  | _                => Stuck
+  | Plddw r lo hi         => exec_lddw r lo hi rs c_stk m
+  | Pload k r r' o        => exec_load k r r' o rs c_stk m
+  | Pstore k r ri o       => exec_store k r ri o rs c_stk m
+  | Palu o w r ri         => exec_alu o w r ri rs c_stk m
+  | Pjmp32 o              => exec_jmp32 o rs c_stk m
+  | Pjmp64 i              => exec_jmp64 i rs c_stk m
+  | Pjmpcmp op w r ri o   => exec_jmpcmp w op r ri o rs c_stk m
+  | Pcall CallInternal i  => exec_call_internal i rs c_stk m
+  | Pret                  => exec_ret rs c_stk m
+  | _                     => Stuck
   end.
 
 
@@ -830,27 +846,42 @@ Definition loc_external_result (sg: signature) : rpair preg :=
 (** Execution of the instruction at [rs PC]. *)
 
 Inductive state: Type :=
-  | State: regset -> mem -> state.
+  | State: regset -> cstk-> mem -> state
+  | Return: val -> state.
 
-Inductive step: state -> trace -> state -> Prop :=
+Inductive eBPF_event : Set :=
+  | eBPF_vload
+  | eBPF_vstore
+  | eBPF_ext_call
+  | eBPF_atomic
+  | eBPF_switch.
+
+Definition etrace := list eBPF_event.
+Definition eE0: list eBPF_event := nil.
+
+Inductive step (c: code): state -> etrace -> state -> Prop :=
   | exec_step_internal:
-      forall b ofs f i rs m rs' m',
+      forall b ofs i rs stk m rs' stk' m',
       rs PC = Vptr b ofs ->
-      Genv.find_funct_ptr ge b = Some (Internal f) ->
-      find_instr (Ptrofs.unsigned ofs) (fn_code f) = Some i ->
-      exec_instr f i rs m = Next rs' m' ->
-      step (State rs m) E0 (State rs' m') (*
-  | exec_step_builtin:
-      forall b ofs f ef args res rs m vargs t vres rs' m',
+      find_instr (Ptrofs.unsigned ofs) c = Some i ->
+      exec_instr i rs stk m = Next rs' stk' m' ->
+      step c (State rs stk m) eE0 (State rs' stk' m')
+  | exec_step_return:
+      forall b ofs i rs stk m res,
       rs PC = Vptr b ofs ->
-      Genv.find_funct_ptr ge b = Some (Internal f) ->
-      find_instr (Ptrofs.unsigned ofs) f.(fn_code) = Some (Pbuiltin ef args res) ->
-      eval_builtin_args ge rs (rs BP) m args vargs ->
-      external_call ef ge vargs m t vres m' ->
-      rs' = nextinstr
-              (set_res res vres
-                (undef_regs (map preg_of (destroyed_by_builtin ef)) rs)) ->
-      step (State rs m) t (State rs' m')
+      find_instr (Ptrofs.unsigned ofs) c = Some i ->
+      exec_instr i rs stk m = Stop res ->
+      step c (State rs stk m) eE0 (Return res)
+  | exec_step_call:
+      forall b ofs cty i res rs stk m rs' stk' m',
+      rs PC = Vptr b ofs ->
+      find_instr (Ptrofs.unsigned ofs) c = Some (Pcall cty i) ->
+      cty = CallByBTF \/ cty = CallByStaticID ->
+      ebpf_call_function i rs#R1 rs#R2 rs#R3 rs#R4 rs#R5 (Next rs stk m) = Some res ->
+      rs' = nextinstr (undef_caller_save_regs rs)
+                #R0 <- res
+                #PC <- (Val.offset_ptr (rs#PC) Ptrofs.one) ->
+      step c (State rs stk m) [eBPF_ext_call] (State rs' stk' m') (*
   | exec_step_external:
       forall b ef args res rs m t rs' m',
       rs PC = Vptr b Ptrofs.zero ->
@@ -861,19 +892,149 @@ Inductive step: state -> trace -> state -> Prop :=
       step (State rs m) t (State rs' m') *)
       .
 
+ (** The global memory model for all eBPF programs, it splits into:
+ - local memory, like eBPF stack or program-local array, only accessed by eBPF load/store instructions
+ - shared memory, like map, hashmap, only accessed by eBPF atomic instructions
+ *)
+
+Record gstate := mkgstate {
+  gm: mem; (** the CompCert memory model *)
+  grs: block -> regset;
+  local_blks: list block; (** eBPF stack + context + ... *)
+  (* share_blks: list block; (** eBPF map + ... *) *)
+  mtest: memory_chunk -> mem -> block -> Z -> bool; (** simular to load/store, 
+    check the specified region (val, chunk) in the shared memory whether the race-condition occurs *) (*
+  local_blks_wf: forall b, List.In b local_blks -> Mem.valid_block gm b;  *)
+  (*share_blks_wf: forall m b, List.In b share_blks -> Mem.valid_block m b;  (** share blocks are valid in the memory *)
+  share_local_disjoint: forall b, List.In b share_blks <-> ~(List.In b local_blks);  (** share blocks and local blocks are disjoint *)
+  mtest_wf: forall mc m b ofs res,   (** if a block is shared (i.e. not local) and valid in the memory, mtest returns *)
+    mtest mc m b ofs = res ->
+      Mem.valid_pointer m b ofs = true /\ List.In b share_blks; *) (*
+  mtest_wf: forall mc b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
+    mtest mc gm b ofs = res ->
+      Mem.valid_pointer gm b ofs = true /\ ~(List.In b local_blks); *)
+}.
+
+(* Inductive gstate :=
+  | GState: mem -> (block -> regset) -> list block -> 
+    (memory_chunk -> mem -> block -> Z -> bool) -> gstate. *)
+
+(** local blocks are valid in the memory *)
+(* Definition gstate_wf (gst: gstate) :=
+  match gst with
+  | GState gm grs local_blks mtest => 
+    forall b, List.In b local_blks -> Mem.valid_block gm b /\
+    forall mc b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
+      mtest mc gm b ofs = res ->
+        Mem.valid_pointer gm b ofs = true /\ ~(List.In b local_blks)
+  end. *)
+  
+Definition gstate_wf (gst: gstate) :=
+  forall b, List.In b (local_blks gst) -> Mem.valid_block (gm gst) b /\
+  forall mc b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
+    (mtest gst) mc (gm gst) b ofs = res ->
+      Mem.valid_pointer (gm gst) b ofs = true /\ ~(List.In b (local_blks gst)).
+ 
+(*
+Definition update_gmem (gst: gstate) (m: mem): gstate :=
+  mkgstate m (grs gst) ()
+{|
+  gm := m;
+  grs := grs gst;
+  local_blks := local_blks gst;
+  mtest := mtest gst;
+  local_blks_wf := local_blks_wf gst;
+  mtest_wf := mtest_wf gst;
+|}
+. *)
+
+Inductive eBPFThread :=
+  | eTH: block -> code -> eBPFThread.
+
+  (*
+Record eBPFThread := {
+  efd: block; (**r eBPF id *)
+  eprog: code; (**r eBPF program *)
+  eregs: regset; (**r eBPF registers *)
+}.*)
+
+Definition atomic_fun (w: width) (aty: atomic_type) :=
+  match aty with
+  | AtomicADD => match w with W32 => Val.add | W64 => Val.addl end
+  | AtomicOR => match w with W32 => Val.or | W64 => Val.orl end
+  | AtomicXOR => match w with W32 => Val.xor | W64 => Val.xorl end
+  | AtomicAND => match w with W32 => Val.and | W64 => Val.andl end
+  end.
+
+Definition chunk_of_width (w: width) :=
+  match w with
+  | W32 => Mint32
+  | W64 => Mint64
+  end.
+
+Definition exec_atomic_store (w: width) (aty: atomic_type) (dst src: ireg) (o : off) (rs:regset) (m: mem): outcome :=
+  let addr := Val.offset_ptr (rs dst) o in
+  let sv := match w with W32 => Val.loword (rs src) | W64 => rs src end in
+    match Mem.loadv (chunk_of_width w) m addr with
+    | None => Stuck
+    | Some v =>
+      let res := (atomic_fun w aty v sv) in
+        match Mem.storev (chunk_of_width w) m addr res with
+        | None => Stuck
+        | Some m' => Next (nextinstr rs) m'
+        end
+    end.
+
+Definition atomic64_fun (aty: atomic_type) :=
+  match aty with
+  | AtomicADD => Val.addl
+  | AtomicOR => Val.orl
+  | AtomicXOR => Val.xorl
+  | AtomicAND => Val.andl
+  end.
+
+
+
+Inductive gstep (ths: list eBPFThread): gstate -> etrace -> gstate -> Prop :=
+  | exec_gstep_thread_local: forall b c rs ofs gst1 et gst2 rs' m',
+    In (eTH b c) ths ->
+    rs = (grs gst1) b ->
+    rs PC = Vptr b ofs ->
+    gstate_wf gst1 ->
+    step c (State rs (gm gst1)) et (State rs' m') ->
+    gst2 = mkgstate m' (fun blk => if Pos.eqb blk b then rs' else (grs gst1) blk) (local_blks gst1) (mtest gst1) ->
+    gstate_wf gst2 ->
+      gstep ths gst1 et gst2
+  | exec_gstep_atomic: forall b c rs ofs gst1 et gst2 rs' m',
+    In (eTH b c) ths ->
+    rs = (grs gst1) b ->
+    rs PC = Vptr b ofs ->
+    gstate_wf gst1 ->
+
+      gstep ths gst1 et gst2. *)
+
+Record eBPFThreads := {
+  epools: list eBPFThread;
+  epools_disjoint: forall e1 e2,
+    In e1 epools -> In e2 epools ->
+    efd e1 <> efd e2 -> 
+}.
+
+
+
 End RELSEM.
 
 (** Execution of whole programs. *)
 
 Inductive initial_state (p: program): state -> Prop :=
-  | initial_state_intro: forall m0,
+  | initial_state_intro: forall m0 ctx_ptr stk_ptr,
       let ge := Genv.globalenv p in
       let rs0 :=
         (Pregmap.init Vundef)
-          # PC <- (Genv.symbol_address ge p.(prog_main) Ptrofs.zero)
-          # R10 <- Vnullptr
-          # BP  <- Vnullptr
-          # RA <- Vnullptr in
+          # PC  <- (Genv.symbol_address ge p.(prog_main) Ptrofs.zero)
+          # R1  <- ctx_ptr
+          # R10 <- stk_ptr
+          # RA  <- Vnullptr in
       Genv.init_mem p = Some m0 ->
       initial_state p (State rs0 m0).
 
