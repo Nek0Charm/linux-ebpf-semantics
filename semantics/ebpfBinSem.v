@@ -749,11 +749,11 @@ Definition undef_caller_save_regs (rs: regset) : regset :=
     | _ => rs r
     end.
 
-(** Undefine all ebpf registers except caller-saved registers: i.e. R1 to R5 *)
+(** Undefine all ebpf registers except caller-saved registers (i.e. R1 to R5) and R10 *)
 Definition def_caller_save_regs (rs: regset) : regset :=
   fun r =>
     match r with
-    | R1 | R2 | R3 | R4 | R5 => rs r
+    | R1 | R2 | R3 | R4 | R5 | R10 => rs r
     | _ => Vundef
     end.
 
@@ -763,7 +763,7 @@ Definition exec_call_internal (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
   stk_r6 := rs R6;
   stk_r7 := rs R7;
   stk_r8 := rs R8;
-  stk_r9 := rs R9;  
+  stk_r9 := rs R9;
 |} :: c_stk in
   Next
     (def_caller_save_regs rs)
