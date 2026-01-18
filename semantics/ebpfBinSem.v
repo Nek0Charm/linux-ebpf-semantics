@@ -11,6 +11,8 @@ From compcert Require Import Conventions Events Smallstep.
 From compcert Require Stacklayout.
 From compcert Require Import Op.
 
+From bpf.ebpf Require GlobalSem.
+
 Import ListNotations.
 
 (** * Abstract syntax *)
@@ -189,10 +191,11 @@ Inductive call_type : Type :=
   XOR       0xa0   atomic xor
 *)
 Inductive atomic_type : Type :=
-  | AtomicADD
-  | AtomicOR
-  | AtomicAND
-  | AtomicXOR.
+  | AtomicADD (is_db: bool)
+  | AtomicOR  (is_db: bool)
+  | AtomicAND (is_db: bool)
+  | AtomicXOR (is_db: bool)
+  .
 
 Inductive instruction : Type :=
   | Plddw  : forall (dst:ireg) (lo:imm) (hi:imm), instruction                             (**r dst = lo | (hi <<32) *)
@@ -200,7 +203,7 @@ Inductive instruction : Type :=
   | Pload : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = * (size) (src + offset) *)
   | Pstore : forall (sz:sizeOp) (dst:ireg) (src:ireg+imm) (offset:off), instruction       (**r * (size) (dst + offset) = src *)
 
-  | Patomic: forall (aty: atomic_type) (w:width) (dst:ireg) (src:ireg+imm) (offset:off), instruction  (**r atomic instructions *)
+  | Patomic: forall (aty: atomic_type) (dst:ireg) (src:ireg+imm) (offset:off), instruction  (**r atomic instructions *)
 
   | Palu : forall (o:aluOp) (w:width) (r:ireg) (a:ireg+imm), instruction                  (**r arithmetics *)
 
@@ -1028,12 +1031,10 @@ Record ThreadPool := {
 
 Record ProgConfig := mkBuild_ProgConfig {
   thread_pool : ThreadPool;
-  cur_tid     : tid;
+  env : block -> code;
   gm          : mem;
   atom_bit    : bool; (*r true -> In atomic zone; false -> NOT-IN atomic zone *)
 }.
-
-Variable env : block -> code.
 
 Definition update_core (tp: ThreadPool) (t: tid) (r: regset): ThreadPool :=
 {|
@@ -1052,10 +1053,10 @@ Definition update_core (tp: ThreadPool) (t: tid) (r: regset): ThreadPool :=
 
 Definition atomic_fun (w: width) (aty: atomic_type) :=
   match aty with
-  | AtomicADD => match w with W32 => Val.add | W64 => Val.addl end
-  | AtomicOR => match w with W32 => Val.or | W64 => Val.orl end
-  | AtomicXOR => match w with W32 => Val.xor | W64 => Val.xorl end
-  | AtomicAND => match w with W32 => Val.and | W64 => Val.andl end
+  | AtomicADD w => if w then Val.addl else Val.add
+  | AtomicOR  w => if w then Val.orl else Val.or
+  | AtomicXOR w => if w then Val.xorl else Val.xorl
+  | AtomicAND w => if w then Val.andl else Val.andl
   end.
 
 Definition chunk_of_width (w: width) :=
@@ -1090,40 +1091,140 @@ Inductive atomic_step (c: code): state -> etrace -> state -> Prop :=
   | exec_atomic_step:
       forall b ofs rs m rs' m' et aty w dst src o,
       rs PC = Vptr b ofs ->
-      find_instr (Ptrofs.unsigned ofs) c = Some (Patomic aty w dst src o) ->
+      find_instr (Ptrofs.unsigned ofs) c = Some (Patomic aty dst src o) ->
       exec_atomic w aty dst src o rs m = Next rs' m' ->
       exec_atomic_instr_event aty = et ->
         atomic_step c (State rs m) et (State rs' m').   
 
 
-Inductive gstep: ProgConfig -> etrace -> ProgConfig -> Prop :=
-  | Core_step: forall tp cid gm d et rs tp' rs' gm' blk,
+Inductive cstep: tid -> ProgConfig -> etrace -> ProgConfig -> Prop :=
+  | Core_step: forall tp cid ge gm d et rs tp' rs' gm' blk,
     (tp_map tp) cid = Some (rs, blk) ->
     update_core tp cid rs' = tp' ->
-    step (env blk) (State rs gm) et (State rs' gm') ->
-      gstep (mkBuild_ProgConfig tp cid gm d) et 
-            (mkBuild_ProgConfig tp' cid gm' d)
+    step (ge blk) (State rs gm) et (State rs' gm') ->
+      cstep cid (mkBuild_ProgConfig tp ge gm d) et 
+                (mkBuild_ProgConfig tp' ge gm' d)
 
+  | At_step: forall tp cid ge gm d et rs tp' rs' gm' blk,
+    (tp_map tp) cid = Some (rs, blk) ->
+    atomic_step (ge blk) (State rs gm) et (State rs' gm') ->
+      cstep cid (mkBuild_ProgConfig tp ge gm d) et 
+                (mkBuild_ProgConfig tp' ge gm' d)
+            .
+
+Definition is_atomic (cid: tid) (st: ProgConfig): bool :=
+  match (tp_map (thread_pool st)) cid with
+  | None => false 
+  | Some (rs, blk) =>
+    let c := (env st) blk in
+      match rs PC with
+      | Vptr b ofs =>
+        match find_instr (Ptrofs.unsigned ofs) c with
+        | Some ins =>
+          match ins with 
+          | (Pcall cty i) => true
+          | _ => false
+          end
+        | None => false
+        end
+      | _ => false
+      end
+  end.
+
+Definition read_address (cid: tid) (st: ProgConfig): val -> Prop :=
+  fun a =>
+    match (tp_map (thread_pool st)) cid with
+    | None => False 
+    | Some (rs, blk) =>
+      let c := (env st) blk in
+        match rs PC with
+        | Vptr b ofs =>
+          match find_instr (Ptrofs.unsigned ofs) c with
+          | Some ins =>
+            match ins with
+            | Pload sz dst src offset =>
+              (Val.offset_ptr rs#src offset) = a (*
+            | Pstore sz dst src offset =>
+              (Val.offset_ptr rs#dst offset) = a
+            | Patomic aty dst src offset =>
+              (* TODO: refine atomic instruction? *)
+              (Val.offset_ptr rs#dst offset) = a *)
+            | _ => True
+            end
+          | None => False
+          end
+        | _ => False
+        end
+      end.
+
+Definition write_address  (cid: tid) (st: ProgConfig): val -> Prop :=
+  fun a =>
+    match (tp_map (thread_pool st)) cid with
+    | None => False 
+    | Some (rs, blk) =>
+      let c := (env st) blk in
+        match rs PC with
+        | Vptr b ofs =>
+          match find_instr (Ptrofs.unsigned ofs) c with
+          | Some ins =>
+            match ins with
+            | Pstore sz dst src offset =>
+              (Val.offset_ptr rs#dst offset) = a
+            | Patomic aty dst src offset =>
+              (* TODO: refine atomic instruction? *)
+              (Val.offset_ptr rs#dst offset) = a
+            | _ => True
+            end
+          | None => False
+          end
+        | _ => False
+        end
+      end.
+
+Definition has_race (s:ProgConfig) (tid1:tid) (tid2:tid) :=
+ (* (is_atomic tid1 s && is_atomic tid2 s = false) /\ (* not both are atomic *) *)
+    (
+      (exists a, write_address tid1 s a /\ write_address tid2 s a) (* concurrent write *)
+      \/
+        (exists a, write_address tid1 s a /\ read_address tid2 s a) (* concurrent read/write *)
+      \/
+        (exists a, read_address tid1 s a /\ write_address tid2 s a)) (* concurrent read/write *)
+      .
+
+Inductive GState :=
+| GNormal (s:ProgConfig)
+| GStuck  (tid:tid) (s:ProgConfig) (* thread [tid] is racy for state [s] *).
+
+Inductive gstep : GState -> etrace -> GState -> Prop :=
+| Atomic_step : forall tid s e s',
+    is_atomic tid s = true -> (* the thread performs an atomic access (if there is a race, the other thread will generate an error) *)
+    cstep tid s e s' ->
+      gstep (GNormal s) e (GNormal s')
+| NAtomic_step : forall tid s e s',
+    is_atomic tid s = false -> (* the thread do NOT perform an atomic access *)
+    (forall tid', tid <> tid' -> not (has_race s tid tid')) -> (* but there is no race. *)
+    cstep tid s e s' ->
+      gstep (GNormal s) e (GNormal s')
+| Error_step : forall tid s,
+    is_atomic tid s = false -> (* theres is a non-atomic racy access *)
+    (exists tid', tid' <> tid /\ has_race s tid tid') ->
+      gstep (GNormal s) eE0 (GStuck tid s).
+  (*
   | Switch_step: forall tp cid gm d cid' s s',
     (tp_map tp) cid = Some s -> (* valid eBPF thread id *)
     (tp_map tp) cid' = Some s' -> (* valid eBPF thread id *)
-      gstep (mkBuild_ProgConfig tp cid gm d) [eBPF_switch]
+      gstep (mkBuild_ProgConfig tp ge gm d) [eBPF_switch]
             (mkBuild_ProgConfig tp cid' gm d)
-
-  | Atomic_step: forall tp cid gm d et rs tp' rs' gm' blk,
-    (tp_map tp) cid = Some (rs, blk) ->
-    atomic_step (env blk) (State rs gm) et (State rs' gm') ->
-      gstep (mkBuild_ProgConfig tp cid gm d) et 
-            (mkBuild_ProgConfig tp' cid gm' d)
 .
   | Callstep: 
             
-.
+.*)
 
 
 End RELSEM.
 
 
+(*
 Inductive thread_state :=
   | TState: regset -> cstk -> thread_state.
 
@@ -1240,7 +1341,7 @@ Inductive gstep (ths: list eBPFThread): gstate -> etrace -> gstate -> Prop :=
     rs PC = Vptr b ofs ->
     gstate_wf gst1 ->
 
-      gstep ths gst1 et gst2. *)
+      gstep ths gst1 et gst2.
 
 Record eBPFThreads := {
   epools: list eBPFThread;
