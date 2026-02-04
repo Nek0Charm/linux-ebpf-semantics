@@ -195,6 +195,10 @@ Inductive atomic_type : Type :=
   | AtomicOR  (is_db: bool)
   | AtomicAND (is_db: bool)
   | AtomicXOR (is_db: bool)
+  | AtomicXCHG (is_db: bool)
+  | AtomicCMPXCHG (is_db: bool)
+  | LOAD_ACQUIRE (sz:sizeOp)
+  | STORE_RELEASE (sz:sizeOp)
   .
 
 Inductive instruction : Type :=
@@ -949,8 +953,8 @@ Definition loc_external_result (sg: signature) : rpair preg :=
 
 (** Execution of the instruction at [rs PC]. *)
 
-Inductive state: Type :=
-  | State: regset -> mem -> state.
+Inductive tls_state: Type :=
+  | TLS_State: regset -> mem -> tls_state.
 
 Inductive eBPF_event : Set :=
   | eBPF_vload
@@ -969,14 +973,14 @@ Definition exec_instr_event (i: instruction) : etrace :=
   | _                     => eE0
   end.
 
-Inductive step (c: code): state -> etrace -> state -> Prop :=
+Inductive step (c: code): tls_state -> etrace -> tls_state -> Prop :=
   | exec_step_internal:
       forall b ofs i rs m rs' m' et,
       rs PC = Vptr b ofs ->
       find_instr (Ptrofs.unsigned ofs) c = Some i ->
       exec_instr i rs m = Next rs' m' ->
       exec_instr_event i = et ->
-      step c (State rs m) et (State rs' m')
+      step c (TLS_State rs m) et (TLS_State rs' m')
   | exec_step_external:
       forall b ofs cty i res rs m rs' m',
       rs PC = Vptr b ofs ->
@@ -986,7 +990,7 @@ Inductive step (c: code): state -> etrace -> state -> Prop :=
       rs' = nextinstr (undef_caller_save_regs rs)
                 #R0 <- res
                 #PC <- (Val.offset_ptr (rs#PC) Ptrofs.one) ->
-      step c (State rs m) [eBPF_ext_call] (State rs' m') (*
+      step c (TLS_State rs m) [eBPF_ext_call] (TLS_State rs' m') (*
   | exec_step_external:
       forall b ef args res rs m t rs' m',
       rs PC = Vptr b Ptrofs.zero ->
@@ -998,8 +1002,8 @@ Inductive step (c: code): state -> etrace -> state -> Prop :=
       .
 
 
-Inductive initial_state (p: program) (blk stk: block): state -> Prop :=
-  | initial_state_intro: forall m0,
+Inductive initial_lst_state (p: program) (blk stk: block): tls_state -> Prop :=
+  | initial_lst_state_intro: forall m0,
       let rs0 :=
         (Pregmap.init Vundef)
           # PC <- (Vptr blk Ptrofs.zero)
@@ -1009,13 +1013,13 @@ Inductive initial_state (p: program) (blk stk: block): state -> Prop :=
       (forall i, 0<= i -> i < 512 \/ (i <= 512+2*8 /\ i < 512+6*8) -> Mem.load Mint8unsigned m0 blk i = Some Vundef) -> (**r the init content of [0, 512) + r6-r9 are all Vundef *)
       Mem.load Mint64 m0 blk 512 = Some Vnullptr -> (**r the init old_ra is Vnullptr *)
       Mem.load Mint64 m0 blk (512+1*8) = Some Vnullptr -> (**r the init old_sp is Vnullptr *)
-      initial_state p blk stk (State rs0 m0).
+      initial_lst_state p blk stk (TLS_State rs0 m0).
 
-Inductive final_state: state -> int64 -> Prop :=
-  | final_state_intro: forall rs m r,
+Inductive final_lst_state: tls_state -> int64 -> Prop :=
+  | final_lst_state_intro: forall rs m r,
       rs PC = Vnullptr ->
       rs R0 = Vlong r ->
-      final_state (State rs m) r.
+      final_lst_state (TLS_State rs m) r.
 
 
  (** The global memory model for all eBPF programs, it splits into:
@@ -1029,7 +1033,7 @@ Record ThreadPool := {
   next_tid : tid;
 }.
 
-Record ProgConfig := mkBuild_ProgConfig {
+Record state := mkBuild_state {
   thread_pool : ThreadPool;
   env : block -> code;
   gm          : mem;
@@ -1057,6 +1061,7 @@ Definition atomic_fun (w: width) (aty: atomic_type) :=
   | AtomicOR  w => if w then Val.orl else Val.or
   | AtomicXOR w => if w then Val.xorl else Val.xorl
   | AtomicAND w => if w then Val.andl else Val.andl
+  | _ => Val.andl (** TODO *)
   end.
 
 Definition chunk_of_width (w: width) :=
@@ -1087,32 +1092,32 @@ Definition exec_atomic (w: width) (aty: atomic_type) (dst: ireg) (src: ireg+imm)
 Definition exec_atomic_instr_event (aty: atomic_type): etrace :=
   [eBPF_vload].
 
-Inductive atomic_step (c: code): state -> etrace -> state -> Prop :=
+Inductive atomic_step (c: code): tls_state -> etrace -> tls_state -> Prop :=
   | exec_atomic_step:
       forall b ofs rs m rs' m' et aty w dst src o,
       rs PC = Vptr b ofs ->
       find_instr (Ptrofs.unsigned ofs) c = Some (Patomic aty dst src o) ->
       exec_atomic w aty dst src o rs m = Next rs' m' ->
       exec_atomic_instr_event aty = et ->
-        atomic_step c (State rs m) et (State rs' m').   
+        atomic_step c (TLS_State rs m) et (TLS_State rs' m').
 
 
-Inductive cstep: tid -> ProgConfig -> etrace -> ProgConfig -> Prop :=
+Inductive nstep: tid -> state -> etrace -> state -> Prop :=
   | Core_step: forall tp cid ge gm d et rs tp' rs' gm' blk,
     (tp_map tp) cid = Some (rs, blk) ->
     update_core tp cid rs' = tp' ->
-    step (ge blk) (State rs gm) et (State rs' gm') ->
-      cstep cid (mkBuild_ProgConfig tp ge gm d) et 
-                (mkBuild_ProgConfig tp' ge gm' d)
+    step (ge blk) (TLS_State rs gm) et (TLS_State rs' gm') ->
+      nstep cid (mkBuild_state tp ge gm d) et 
+                (mkBuild_state tp' ge gm' d).
 
+Inductive astep: tid -> state -> etrace -> state -> Prop :=
   | At_step: forall tp cid ge gm d et rs tp' rs' gm' blk,
     (tp_map tp) cid = Some (rs, blk) ->
-    atomic_step (ge blk) (State rs gm) et (State rs' gm') ->
-      cstep cid (mkBuild_ProgConfig tp ge gm d) et 
-                (mkBuild_ProgConfig tp' ge gm' d)
-            .
+    atomic_step (ge blk) (TLS_State rs gm) et (TLS_State rs' gm') ->
+      astep cid (mkBuild_state tp ge gm d) et 
+                (mkBuild_state tp' ge gm' d).
 
-Definition is_atomic (cid: tid) (st: ProgConfig): bool :=
+Definition is_atomic (cid: tid) (st: state): bool :=
   match (tp_map (thread_pool st)) cid with
   | None => false 
   | Some (rs, blk) =>
@@ -1122,7 +1127,7 @@ Definition is_atomic (cid: tid) (st: ProgConfig): bool :=
         match find_instr (Ptrofs.unsigned ofs) c with
         | Some ins =>
           match ins with 
-          | (Pcall cty i) => true
+          | Patomic aty dst src offset => true
           | _ => false
           end
         | None => false
@@ -1131,8 +1136,8 @@ Definition is_atomic (cid: tid) (st: ProgConfig): bool :=
       end
   end.
 
-Definition read_address (cid: tid) (st: ProgConfig): val -> Prop :=
-  fun a =>
+Definition read_address (cid: tid) (st: state): val -> Prop :=
+  fun addr =>
     match (tp_map (thread_pool st)) cid with
     | None => False 
     | Some (rs, blk) =>
@@ -1143,12 +1148,12 @@ Definition read_address (cid: tid) (st: ProgConfig): val -> Prop :=
           | Some ins =>
             match ins with
             | Pload sz dst src offset =>
-              (Val.offset_ptr rs#src offset) = a (*
+              (Val.offset_ptr rs#src offset) = addr (*
             | Pstore sz dst src offset =>
-              (Val.offset_ptr rs#dst offset) = a
+              (Val.offset_ptr rs#dst offset) = addr
             | Patomic aty dst src offset =>
               (* TODO: refine atomic instruction? *)
-              (Val.offset_ptr rs#dst offset) = a *)
+              (Val.offset_ptr rs#dst offset) = addr *)
             | _ => True
             end
           | None => False
@@ -1157,8 +1162,8 @@ Definition read_address (cid: tid) (st: ProgConfig): val -> Prop :=
         end
       end.
 
-Definition write_address  (cid: tid) (st: ProgConfig): val -> Prop :=
-  fun a =>
+Definition write_address  (cid: tid) (st: state): val -> Prop :=
+  fun addr =>
     match (tp_map (thread_pool st)) cid with
     | None => False 
     | Some (rs, blk) =>
@@ -1169,10 +1174,10 @@ Definition write_address  (cid: tid) (st: ProgConfig): val -> Prop :=
           | Some ins =>
             match ins with
             | Pstore sz dst src offset =>
-              (Val.offset_ptr rs#dst offset) = a
+              (Val.offset_ptr rs#dst offset) = addr
             | Patomic aty dst src offset =>
               (* TODO: refine atomic instruction? *)
-              (Val.offset_ptr rs#dst offset) = a
+              (Val.offset_ptr rs#dst offset) = addr
             | _ => True
             end
           | None => False
@@ -1181,8 +1186,8 @@ Definition write_address  (cid: tid) (st: ProgConfig): val -> Prop :=
         end
       end.
 
-Definition has_race (s:ProgConfig) (tid1:tid) (tid2:tid) :=
- (* (is_atomic tid1 s && is_atomic tid2 s = false) /\ (* not both are atomic *) *)
+Definition has_race (s:state) (tid1:tid) (tid2:tid) :=
+ (is_atomic tid1 s && is_atomic tid2 s = false) /\ (* not both are atomic *)
     (
       (exists a, write_address tid1 s a /\ write_address tid2 s a) (* concurrent write *)
       \/
@@ -1192,18 +1197,18 @@ Definition has_race (s:ProgConfig) (tid1:tid) (tid2:tid) :=
       .
 
 Inductive GState :=
-| GNormal (s:ProgConfig)
-| GStuck  (tid:tid) (s:ProgConfig) (* thread [tid] is racy for state [s] *).
+| GNormal (s:state)
+| GStuck  (tid:tid) (s:state) (* thread [tid] is racy for state [s] *).
 
 Inductive gstep : GState -> etrace -> GState -> Prop :=
 | Atomic_step : forall tid s e s',
     is_atomic tid s = true -> (* the thread performs an atomic access (if there is a race, the other thread will generate an error) *)
-    cstep tid s e s' ->
+    astep tid s e s' ->
       gstep (GNormal s) e (GNormal s')
 | NAtomic_step : forall tid s e s',
     is_atomic tid s = false -> (* the thread do NOT perform an atomic access *)
-    (forall tid', tid <> tid' -> not (has_race s tid tid')) -> (* but there is no race. *)
-    cstep tid s e s' ->
+    (forall tid', tid <> tid' -> not (has_race s tid' tid)) -> (* but there is no race. *)
+    nstep tid s e s' ->
       gstep (GNormal s) e (GNormal s')
 | Error_step : forall tid s,
     is_atomic tid s = false -> (* theres is a non-atomic racy access *)
@@ -1213,8 +1218,8 @@ Inductive gstep : GState -> etrace -> GState -> Prop :=
   | Switch_step: forall tp cid gm d cid' s s',
     (tp_map tp) cid = Some s -> (* valid eBPF thread id *)
     (tp_map tp) cid' = Some s' -> (* valid eBPF thread id *)
-      gstep (mkBuild_ProgConfig tp ge gm d) [eBPF_switch]
-            (mkBuild_ProgConfig tp cid' gm d)
+      gstep (mkBuild_state tp ge gm d) [eBPF_switch]
+            (mkBuild_state tp cid' gm d)
 .
   | Callstep: 
             
