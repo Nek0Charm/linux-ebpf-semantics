@@ -11,7 +11,7 @@ From compcert Require Import Conventions Events Smallstep.
 From compcert Require Stacklayout.
 From compcert Require Import Op.
 
-From bpf.ebpf Require GlobalSem.
+From bpf.ebpf Require Import GlobalSem.
 
 Import ListNotations.
 
@@ -1100,7 +1100,18 @@ Inductive atomic_step (c: code): tls_state -> etrace -> tls_state -> Prop :=
       exec_atomic w aty dst src o rs m = Next rs' m' ->
       exec_atomic_instr_event aty = et ->
         atomic_step c (TLS_State rs m) et (TLS_State rs' m').
+  (*
+  | Switch_step: forall tp cid gm d cid' s s',
+    (tp_map tp) cid = Some s -> (* valid eBPF thread id *)
+    (tp_map tp) cid' = Some s' -> (* valid eBPF thread id *)
+      gstep (mkBuild_state tp ge gm d) [eBPF_switch]
+            (mkBuild_state tp cid' gm d)
+.
+  | Callstep: 
+            
+.*)
 
+Section eBPF_GlobalSem.
 
 Inductive nstep: tid -> state -> etrace -> state -> Prop :=
   | Core_step: forall tp cid ge gm d et rs tp' rs' gm' blk,
@@ -1213,21 +1224,10 @@ Inductive gstep : GState -> etrace -> GState -> Prop :=
 | Error_step : forall tid s,
     is_atomic tid s = false -> (* theres is a non-atomic racy access *)
     (exists tid', tid' <> tid /\ has_race s tid tid') ->
-      gstep (GNormal s) eE0 (GStuck tid s).
-  (*
-  | Switch_step: forall tp cid gm d cid' s s',
-    (tp_map tp) cid = Some s -> (* valid eBPF thread id *)
-    (tp_map tp) cid' = Some s' -> (* valid eBPF thread id *)
-      gstep (mkBuild_state tp ge gm d) [eBPF_switch]
-            (mkBuild_state tp cid' gm d)
-.
-  | Callstep: 
-            
-.*)
-
+      gstep (GNormal s) eE0 (GStuck tid s).  
+End eBPF_GlobalSem.
 
 End RELSEM.
-
 
 (*
 Inductive thread_state :=

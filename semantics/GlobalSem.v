@@ -33,7 +33,7 @@ Inductive estep : State -> trace -> State -> Prop :=
     estep (Normal s) e (Normal s')
 | NAtomic_step : forall tid s e s',
     is_atomic tid s = false -> (* the thread do NOT perform an atomic access *)
-    (forall tid', tid <> tid' -> not (has_race s tid tid')) -> (* but there is no race. *)
+    (forall tid', tid <> tid' -> not (has_race s tid' tid)) -> (* but there is no race. *)
     step tid s e s' ->
       estep (Normal s) e (Normal s')
 | Error_step : forall tid s,
