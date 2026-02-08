@@ -812,6 +812,8 @@ Definition stack_offset (z:Z) :=
 
 **)
 
+Definition bpf_stack_size: Z := 512%Z.
+
 Definition alloc_frame (sz: Z) (ofs_link ofs_ra ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
   (rs: regset) (m: mem): option (regset * mem) := 
   let (m1, stk) := Mem.alloc m 0 sz in
@@ -833,8 +835,8 @@ Definition alloc_frame (sz: Z) (ofs_link ofs_ra ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptr
 
 Definition exec_call_internal (i: imm) (rs: regset) (m: mem) :=
   let target_pc := Val.offset_ptr (Val.offset_ptr (rs PC) (Ptrofs.of_int i)) Ptrofs.one in
-    match alloc_frame (512+6*8) (Ptrofs.repr (512+0*8)) (Ptrofs.repr (512+1*8))
-      (Ptrofs.repr (512+2*8)) (Ptrofs.repr (512+3*8)) (Ptrofs.repr (512+4*8)) (Ptrofs.repr (512+5*8)) rs m with
+    match alloc_frame (bpf_stack_size+6*8) (Ptrofs.repr (bpf_stack_size+0*8)) (Ptrofs.repr (bpf_stack_size+1*8))
+      (Ptrofs.repr (bpf_stack_size+2*8)) (Ptrofs.repr (bpf_stack_size+3*8)) (Ptrofs.repr (bpf_stack_size+4*8)) (Ptrofs.repr (bpf_stack_size+5*8)) rs m with
     | None => Stuck
     | Some (rs', m') => Next (def_caller_save_regs rs')#PC <- target_pc m'
     end.
@@ -884,8 +886,8 @@ Definition free_frame (sz: Z) (ofs_link ofs_ra ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptro
   end.
 
 Definition exec_ret (rs: regset) (m: mem) :=
-  match free_frame (512+6*8) (Ptrofs.repr (512+0*8)) (Ptrofs.repr (512+1*8))
-      (Ptrofs.repr (512+2*8)) (Ptrofs.repr (512+3*8)) (Ptrofs.repr (512+4*8)) (Ptrofs.repr (512+5*8)) rs m with
+  match free_frame (bpf_stack_size+6*8) (Ptrofs.repr (bpf_stack_size+0*8)) (Ptrofs.repr (bpf_stack_size+1*8))
+      (Ptrofs.repr (bpf_stack_size+2*8)) (Ptrofs.repr (bpf_stack_size+3*8)) (Ptrofs.repr (bpf_stack_size+4*8)) (Ptrofs.repr (bpf_stack_size+5*8)) rs m with
   | None => Stuck
   | Some (rs', m') => Next (undef_caller_save_regs rs') m'
   end.
@@ -1002,18 +1004,19 @@ Inductive step (c: code): tls_state -> etrace -> tls_state -> Prop :=
       .
 
 
-Inductive initial_lst_state (p: program) (blk stk: block): tls_state -> Prop :=
+Inductive initial_lst_state (p: program) (ctx blk stk: block): tls_state -> Prop :=
   | initial_lst_state_intro: forall m0,
       let rs0 :=
         (Pregmap.init Vundef)
           # PC <- (Vptr blk Ptrofs.zero)
           # R10 <- (Vptr stk Ptrofs.zero)
+          # R1 <- (Vptr ctx Ptrofs.zero)
           # BP  <- Vnullptr in
-      (forall i, 0<= i -> i < 512+6*8 -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512*8) *)
-      (forall i, 0<= i -> i < 512 \/ (i <= 512+2*8 /\ i < 512+6*8) -> Mem.load Mint8unsigned m0 blk i = Some Vundef) -> (**r the init content of [0, 512) + r6-r9 are all Vundef *)
-      Mem.load Mint64 m0 blk 512 = Some Vnullptr -> (**r the init old_ra is Vnullptr *)
-      Mem.load Mint64 m0 blk (512+1*8) = Some Vnullptr -> (**r the init old_sp is Vnullptr *)
-      initial_lst_state p blk stk (TLS_State rs0 m0).
+      (forall i, 0<= i -> i < bpf_stack_size+6*8 -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512*8) *)
+      (forall i, 0<= i -> i < bpf_stack_size \/ (i <= bpf_stack_size+2*8 /\ i < bpf_stack_size+6*8) -> Mem.load Mint8unsigned m0 blk i = Some Vundef) -> (**r the init content of [0, 512) + r6-r9 are all Vundef *)
+      Mem.load Mint64 m0 blk bpf_stack_size = Some Vnullptr -> (**r the init old_ra is Vnullptr *)
+      Mem.load Mint64 m0 blk (bpf_stack_size+1*8) = Some Vnullptr -> (**r the init old_sp is Vnullptr *)
+      initial_lst_state p ctx blk stk (TLS_State rs0 m0).
 
 Inductive final_lst_state: tls_state -> int64 -> Prop :=
   | final_lst_state_intro: forall rs m r,
@@ -1228,237 +1231,3 @@ Inductive gstep : GState -> etrace -> GState -> Prop :=
 End eBPF_GlobalSem.
 
 End RELSEM.
-
-(*
-Inductive thread_state :=
-  | TState: regset -> cstk -> thread_state.
-
-Fixpoint update_error {A:Type} (l:list A) (n:nat) (v: A) {struct n} : option (list A) :=
-  match n, l with
-    | O, x :: tl => Some (v::tl)
-    | S n, x :: tl => 
-      match update_error tl n v with
-      | None => None
-      | Some rl => Some (x::rl)
-      end
-    | _, _ => None
-  end.
-
-Inductive gstep (l: list code) : list thread_state -> mem -> etrace -> list thread_state -> mem -> Prop :=
-  | Gstep_thread_next: forall n c ts m rs stk t ts' m' rs' stk',
-    List.nth_error l n = Some c ->
-    List.nth_error ts n = Some (TState rs stk) ->
-    step c (State rs stk m) t (State rs' stk' m') ->
-    update_error ts n (TState rs' stk') = Some ts' ->
-      gstep l ts m t ts' m'
-  | Gstep_thread_stop: forall n c ts m rs stk t res,
-    List.nth_error l n = Some c ->
-    List.nth_error ts n = Some (TState rs stk) ->
-    step c (State rs stk m) t (Return res) ->
-      gstep l ts m t ts m
-    .
-
-Record gstate := mkgstate {
-  gm: mem; (** the CompCert memory model *)
-  grs: block -> regset;
-  local_blks: list block; (** eBPF stack + context + ... *)
-  (* share_blks: list block; (** eBPF map + ... *) *)
-  mtest: memory_chunk -> mem -> block -> Z -> bool; (** simular to load/store, 
-    check the specified region (val, chunk) in the shared memory whether the race-condition occurs *) (*
-  local_blks_wf: forall b, List.In b local_blks -> Mem.valid_block gm b;  *)
-  (*share_blks_wf: forall m b, List.In b share_blks -> Mem.valid_block m b;  (** share blocks are valid in the memory *)
-  share_local_disjoint: forall b, List.In b share_blks <-> ~(List.In b local_blks);  (** share blocks and local blocks are disjoint *)
-  mtest_wf: forall mc m b ofs res,   (** if a block is shared (i.e. not local) and valid in the memory, mtest returns *)
-    mtest mc m b ofs = res ->
-      Mem.valid_pointer m b ofs = true /\ List.In b share_blks; *) (*
-  mtest_wf: forall mc b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
-    mtest mc gm b ofs = res ->
-      Mem.valid_pointer gm b ofs = true /\ ~(List.In b local_blks); *)
-}.
-
-(* Inductive gstate :=
-  | GState: mem -> (block -> regset) -> list block -> 
-    (memory_chunk -> mem -> block -> Z -> bool) -> gstate. *)
-
-(** local blocks are valid in the memory *)
-(* Definition gstate_wf (gst: gstate) :=
-  match gst with
-  | GState gm grs local_blks mtest => 
-    forall b, List.In b local_blks -> Mem.valid_block gm b /\
-    forall mc b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
-      mtest mc gm b ofs = res ->
-        Mem.valid_pointer gm b ofs = true /\ ~(List.In b local_blks)
-  end. *)
-  
-Definition gstate_wf (gst: gstate) :=
-  forall b, List.In b (local_blks gst) -> Mem.valid_block (gm gst) b /\
-  forall mc b ofs res,   (** we only test the shared (i.e. not local) memory regions *)
-    (mtest gst) mc (gm gst) b ofs = res ->
-      Mem.valid_pointer (gm gst) b ofs = true /\ ~(List.In b (local_blks gst)).
- 
-(*
-Definition update_gmem (gst: gstate) (m: mem): gstate :=
-  mkgstate m (grs gst) ()
-{|
-  gm := m;
-  grs := grs gst;
-  local_blks := local_blks gst;
-  mtest := mtest gst;
-  local_blks_wf := local_blks_wf gst;
-  mtest_wf := mtest_wf gst;
-|}
-. *)
-
-Inductive eBPFThread :=
-  | eTH: block -> code -> eBPFThread.
-
-  (*
-Record eBPFThread := {
-  efd: block; (**r eBPF id *)
-  eprog: code; (**r eBPF program *)
-  eregs: regset; (**r eBPF registers *)
-}.*)
-
-
-Definition atomic64_fun (aty: atomic_type) :=
-  match aty with
-  | AtomicADD => Val.addl
-  | AtomicOR => Val.orl
-  | AtomicXOR => Val.xorl
-  | AtomicAND => Val.andl
-  end.
-
-
-
-Inductive gstep (ths: list eBPFThread): gstate -> etrace -> gstate -> Prop :=
-  | exec_gstep_thread_local: forall b c rs ofs gst1 et gst2 rs' m',
-    In (eTH b c) ths ->
-    rs = (grs gst1) b ->
-    rs PC = Vptr b ofs ->
-    gstate_wf gst1 ->
-    step c (State rs (gm gst1)) et (State rs' m') ->
-    gst2 = mkgstate m' (fun blk => if Pos.eqb blk b then rs' else (grs gst1) blk) (local_blks gst1) (mtest gst1) ->
-    gstate_wf gst2 ->
-      gstep ths gst1 et gst2
-  | exec_gstep_atomic: forall b c rs ofs gst1 et gst2 rs' m',
-    In (eTH b c) ths ->
-    rs = (grs gst1) b ->
-    rs PC = Vptr b ofs ->
-    gstate_wf gst1 ->
-
-      gstep ths gst1 et gst2.
-
-Record eBPFThreads := {
-  epools: list eBPFThread;
-  epools_disjoint: forall e1 e2,
-    In e1 epools -> In e2 epools ->
-    efd e1 <> efd e2 -> 
-}.
-
-
-
-End RELSEM.
-
-(** Execution of whole programs. *)
-
-Inductive initial_state (p: program): state -> Prop :=
-  | initial_state_intro: forall m0 ctx_ptr stk_ptr,
-      let ge := Genv.globalenv p in
-      let rs0 :=
-        (Pregmap.init Vundef)
-          # PC  <- (Genv.symbol_address ge p.(prog_main) Ptrofs.zero)
-          # R1  <- ctx_ptr
-          # R10 <- stk_ptr
-          # RA  <- Vnullptr in
-      Genv.init_mem p = Some m0 ->
-      initial_state p (State rs0 m0).
-
-Inductive final_state: state -> int -> Prop :=
-  | final_state_intro: forall rs m r,
-      rs PC = Vnullptr ->
-      rs R0 = Vint r ->
-      final_state (State rs m) r.
-
-Definition semantics (p: program) :=
-  Semantics step (initial_state p) final_state (Genv.globalenv p).
-
-(** Determinacy of the [Asm] semantics. *)
-
-Remark extcall_arguments_determ:
-  forall rs m sg args1 args2,
-  extcall_arguments rs m sg args1 -> extcall_arguments rs m sg args2 -> args1 = args2.
-Proof.
-  intros until m.
-  assert (A: forall l v1 v2,
-             extcall_arg rs m l v1 -> extcall_arg rs m l v2 -> v1 = v2).
-  { intros. inv H; inv H0; congruence. }
-  assert (B: forall p v1 v2,
-             extcall_arg_pair rs m p v1 -> extcall_arg_pair rs m p v2 -> v1 = v2).
-  { intros. inv H; inv H0.
-    eapply A; eauto.
-    f_equal; eapply A; eauto. }
-  assert (C: forall ll vl1, list_forall2 (extcall_arg_pair rs m) ll vl1 ->
-             forall vl2, list_forall2 (extcall_arg_pair rs m) ll vl2 -> vl1 = vl2).
-  {
-    induction 1; intros vl2 EA; inv EA.
-    auto.
-    f_equal; eauto. }
-  intros. eapply C; eauto.
-Qed.
-
-Lemma semantics_determinate: forall p, determinate (semantics p).
-Proof.
-Ltac Equalities :=
-  match goal with
-  | [ H1: ?a = ?b, H2: ?a = ?c |- _ ] =>
-      rewrite H1 in H2; inv H2; Equalities
-  | _ => idtac
-  end.
-  intros; constructor; simpl; intros.
-- (* determ *)
-  inv H; inv H0; Equalities.
-  split. constructor. auto.
-  discriminate.
-  discriminate.
-  assert (vargs0 = vargs) by (eapply eval_builtin_args_determ; eauto). subst vargs0.
-  exploit external_call_determ. eexact H5. eexact H11. intros [A B].
-  split. auto. intros. destruct B; auto. subst. auto.
-  assert (args0 = args) by (eapply extcall_arguments_determ; eauto). subst args0.
-  exploit external_call_determ. eexact H3. eexact H8. intros [A B].
-  split. auto. intros. destruct B; auto. subst. auto.
-- (* trace length *)
-  red; intros. inv H; simpl.
-  lia.
-  eapply external_call_trace_length; eauto.
-  eapply external_call_trace_length; eauto.
-- (* initial states *)
-  inv H; inv H0. f_equal. congruence.
-- (* final no step *)
-  assert (NOTNULL: forall b ofs, Vnullptr <> Vptr b ofs).
-  { intros; unfold Vnullptr; destruct Archi.ptr64; congruence. }
-  inv H. unfold Vzero in H0. red; intros; red; intros.
-  inv H; rewrite H0 in *; eelim NOTNULL; eauto.
-- (* final states *)
-  inv H; inv H0. congruence.
-Qed.
-
-(** Classification functions for processor registers (used in Asmgenproof). *)
-
-Definition data_preg (r: preg) : bool :=
-  match r with
-  | IR R10 => false
-  | IR _ => true
-  | FR _ => true
-  | PC   => false
-  | RA   => false
-  end.
-
-(* data_preg_sp includes R10 *)
-Definition data_preg_sp (r: preg) : bool :=
-  match r with
-  | IR _ => true
-  | FR _ => true
-  | PC   => false
-  | RA   => false
-  end.
-  *)
