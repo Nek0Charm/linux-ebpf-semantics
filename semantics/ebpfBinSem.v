@@ -35,8 +35,8 @@ Definition callee_saved_registers: list ireg := [R6; R7; R8; R9].
 
 Inductive preg :=
 | IR : ireg -> preg  (**r integer registers *)
-| PC : preg          (**r program counter *)
-| BP : preg          (**r base address register *)
+| PC : preg          (**r program counter *)  (*
+| BP : preg          (**r base address register *) *)
 .
 
 Coercion IR: ireg >-> preg.
@@ -314,7 +314,8 @@ Record cstk' := mk_cstk' {
   stk_r6: val;
   stk_r7: val;
   stk_r8: val;
-  stk_r9: val;  
+  stk_r9: val;
+  stk_r10: val;
 }.
 
 Definition cstk := list cstk'.
@@ -765,7 +766,7 @@ Definition undef_caller_save_regs (rs: regset) : regset :=
 Definition def_caller_save_regs (rs: regset) : regset :=
   fun r =>
     match r with
-    | R1 | R2 | R3 | R4 | R5 | R10 | BP => rs r
+    | R1 | R2 | R3 | R4 | R5 (* | R10 | BP *) => rs r
     | _ => Vundef
     end.
 
@@ -845,15 +846,18 @@ Definition exec_call_internal (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
 
 Definition exec_call_internal (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
   let n_stk := {|
-  stk_ra := Val.offset_ptr rs#PC Ptrofs.one;
-  stk_r6 := rs R6;
-  stk_r7 := rs R7;
-  stk_r8 := rs R8;
-  stk_r9 := rs R9;  
-|} :: c_stk in
+    stk_ra := Val.offset_ptr rs#PC Ptrofs.one;
+    stk_r6 := rs R6;
+    stk_r7 := rs R7;
+    stk_r8 := rs R8;
+    stk_r9 := rs R9;
+    stk_r10 := rs R10;
+  |} :: c_stk in
+  let (m', nsp) := Mem.alloc m 0 bpf_stack_size in
   Next
-    (def_caller_save_regs rs)
-      #PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)) n_stk m.
+    ((def_caller_save_regs rs)
+      #PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i))
+      #R10 <- (Vptr nsp (Ptrofs.repr bpf_stack_size))) n_stk m'.
 
 (*
 Definition reload_callee_save_registers (ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
@@ -907,17 +911,27 @@ Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
   | Some (rs', m') => Next (undef_caller_save_regs rs') m'
   end.
 *)
+
 Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
   match c_stk with
   | [] => Next (rs#PC <- Vnullptr) c_stk m (**r rs#R0 includes the return value *)
   | h :: tl_stk =>
-    Next
-      (undef_caller_save_regs rs)
-      #PC <- (stk_ra h)
-      #R6 <- (stk_r6 h)
-      #R7 <- (stk_r7 h)
-      #R8 <- (stk_r8 h)
-      #R9 <- (stk_r9 h) tl_stk m
+    match rs R10 with
+    | Vptr b ofs =>
+      match Mem.free m b 0 bpf_stack_size with
+      | None => Stuck
+      | Some m' =>
+        Next
+          (undef_caller_save_regs rs)
+          #PC <- (stk_ra h)
+          #R6 <- (stk_r6 h)
+          #R7 <- (stk_r7 h)
+          #R8 <- (stk_r8 h)
+          #R9 <- (stk_r9 h)
+          #R10 <- (stk_r10 h) tl_stk m'
+      end
+    | _ => Stuck
+    end
   end.
 
 (** Execution of a single instruction [i] in initial state
@@ -1031,7 +1045,7 @@ Inductive initial_lst_state (ctx blk stk: block): tls_state -> Prop :=
           # PC <- (Vptr blk Ptrofs.zero)
           # R10 <- (Vptr stk (Ptrofs.repr bpf_stack_size))
           # R1 <- (Vptr ctx Ptrofs.zero)
-          # BP  <- Vnullptr in
+          (* # BP  <- Vnullptr *) in
       (forall i, 0<= i -> i < bpf_stack_size -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512) *)
       (*    
       (forall i, 0<= i -> i < bpf_stack_size+6*8 -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512*8) *)
@@ -1040,13 +1054,14 @@ Inductive initial_lst_state (ctx blk stk: block): tls_state -> Prop :=
       Mem.load Mint64 m0 blk (bpf_stack_size+1*8) = Some Vnullptr -> (**r the init old_sp is Vnullptr *) *)
       initial_lst_state ctx blk stk (TLS_State rs0 [] m0).
 
-(*
-Inductive final_lst_state (stk: block): tls_state -> int -> Prop :=
+(* TODO: not sure here: the return value R0 could be a pointer (Vptr b ofs) or (Vlong int64) *)
+Inductive final_lst_state (stk: block): tls_state -> val -> Prop :=
   | final_lst_state_intro: forall rs m r,
       rs PC = Vnullptr ->
-      rs R0 = Vlong r Vptr stk (Ptrofs.repr bpf_stack_size) ->
+      rs R0 = r ->
+      (match r with | Vlong _ | Vptr _ _ => True | _ => False end) ->
       rs R10 = Vptr stk (Ptrofs.repr bpf_stack_size) ->
-      final_lst_state stk (TLS_State rs [] m) r. *)
+      final_lst_state stk (TLS_State rs [] m) r.
 
 
  (** The global memory model for all eBPF programs, it splits into:
