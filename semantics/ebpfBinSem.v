@@ -308,7 +308,7 @@ Fixpoint label_pos (lbl: label) (pos: Z) (c: code) {struct c} : option Z :=
 (*
 Variable ge: genv. *)
 
-(*
+
 Record cstk' := mk_cstk' {
   stk_ra: val;
   stk_r6: val;
@@ -317,7 +317,7 @@ Record cstk' := mk_cstk' {
   stk_r9: val;  
 }.
 
-Definition cstk := list cstk'. *)
+Definition cstk := list cstk'.
 
 (** The semantics is purely small-step and defined as a function
   from the current state (a register set + a memory state)
@@ -326,8 +326,7 @@ Definition cstk := list cstk'. *)
   or [Stuck] if the processor is stuck. *)
 
 Inductive outcome : Type :=
-  | Next: regset -> mem -> outcome (*
-  | Stop: val -> outcome *)
+  | Next: regset -> cstk -> mem -> outcome
   | Stuck: outcome.
 
 (**r give an immediate number for function ID, plus R1-R5 values as well as the current memory,
@@ -342,7 +341,7 @@ Definition nextinstr (rs: regset) :=
   rs#PC <- (Val.offset_ptr rs#PC Ptrofs.one).
 
 (*
-Definition goto_label (f: function) (lbl: label) (rs: regset) (m: mem) :=
+Definition goto_label (f: function) (lbl: label) (rs: regset) (c_stk: cstk) (m: mem) :=
   match label_pos lbl 0 (fn_code f) with
   | None => Stuck
   | Some pos =>
@@ -633,10 +632,10 @@ Definition eval_alu64 (b: aluOp) (dst: val) (v2: val+int) : val :=
   | END e s => eval_end e s dst
   end.
 
-Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (m: mem) :=
+Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (c_stk: cstk) (m: mem) :=
   let alu_f := match w with | W32 => eval_alu32 | W64 => eval_alu64 end in
   let v := alu_f o (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) in
-    Next (nextinstr (rs#r <- v)) m.
+    Next (nextinstr (rs#r <- v)) c_stk m.
 
 (** RFC9669: 4.3. Jump Instructions
 
@@ -692,13 +691,13 @@ Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+imm)
     | NE          => Val.cmplu_bool (Mem.valid_pointer m) Cne dst src
     end.
 
-Definition exec_jmp32 (i: imm) (rs: regset) (m: mem) :=
-  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)))) m.
+Definition exec_jmp32 (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
+  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)))) c_stk m.
 
-Definition exec_jmp64 (o: off) (rs: regset) (m: mem) :=
-  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) m.
+Definition exec_jmp64 (o: off) (rs: regset) (c_stk: cstk) (m: mem) :=
+  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) c_stk m.
 
-Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (m: mem) :=
+Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (c_stk: cstk) (m: mem) :=
   match
     match w with
     | W32 => eval_cmp32 op rs m r ri
@@ -707,7 +706,7 @@ Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) 
   | None => Stuck
   | Some cond => 
     let rs' := if cond then rs#PC <- (Val.offset_ptr (rs PC) o) else rs in
-      Next (nextinstr rs') m
+      Next (nextinstr rs') c_stk m
   end.
 
 (** Auxiliaries for memory accesses *)
@@ -730,10 +729,10 @@ Definition load (k: sizeOp) (addr:val) (m: mem) :=
   | DBWord     => if Archi.ptr64 then Mem.loadv Mint64 m addr else None
   end.
 
-Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (m: mem) :=
+Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
   match load k (Val.offset_ptr rs#r' o) m with
   | None => Stuck
-  | Some v => Next (nextinstr (rs#r <- v)) m
+  | Some v => Next (nextinstr (rs#r <- v)) c_stk m
   end.
 
 Definition store (k: sizeOp) (addr:val) (v:val) (m: mem) :=
@@ -744,15 +743,15 @@ Definition store (k: sizeOp) (addr:val) (v:val) (m: mem) :=
   | DBWord     => if Archi.ptr64 then Mem.storev Mint64 m addr v else None
   end.
 
-Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: regset) (m: mem) :=
+Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
   match store  k (Val.offset_ptr rs#r o) (eval_reg_immw (sizew k) rs ri) m with
   | None => Stuck
-  | Some m' => Next (nextinstr rs) m'
+  | Some m' => Next (nextinstr rs) c_stk m'
   end.
 
-Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (m: mem) :=
+Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
   let v := Vlong (Int64.ofwords hi  lo) in
-    Next (nextinstr (nextinstr (rs#r <- v))) m.
+    Next (nextinstr (nextinstr (rs#r <- v))) c_stk m.
 
 (** Undefine all ebpf caller-saved registers: i.e. R1 to R5 *)
 Definition undef_caller_save_regs (rs: regset) : regset :=
@@ -770,6 +769,7 @@ Definition def_caller_save_regs (rs: regset) : regset :=
     | _ => Vundef
     end.
 
+(*
 Definition spilling_callee_save_registers (ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
   (bp: val) (rs: regset) (m1: mem): option mem := 
   match Mem.storev Mptr m1 (Val.offset_ptr bp ofs_r6) rs#R6 with
@@ -783,7 +783,7 @@ Definition spilling_callee_save_registers (ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
       | Some m4 => Mem.storev Mptr m4 (Val.offset_ptr bp ofs_r9) rs#R9
       end
     end
-  end.
+  end. *)
 
 Definition stack_offset (z:Z) :=
   Ptrofs.repr (z - 6*8). (**r RA + SP + R6 + R7 + R8 + R9 *)
@@ -814,8 +814,9 @@ Definition stack_offset (z:Z) :=
 
 Definition bpf_stack_size: Z := 512%Z.
 
+(*
 Definition alloc_frame (sz: Z) (ofs_link ofs_ra ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
-  (rs: regset) (m: mem): option (regset * mem) := 
+  (rs: regset) (c_stk: cstk) (m: mem): option (regset * mem) := 
   let (m1, stk) := Mem.alloc m 0 sz in
   let bp := (Vptr stk Ptrofs.zero) in
   let sp := Val.offset_ptr bp (stack_offset sz) in
@@ -833,16 +834,30 @@ Definition alloc_frame (sz: Z) (ofs_link ofs_ra ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptr
       end
     end.
 
-Definition exec_call_internal (i: imm) (rs: regset) (m: mem) :=
+Definition exec_call_internal (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
   let target_pc := Val.offset_ptr (Val.offset_ptr (rs PC) (Ptrofs.of_int i)) Ptrofs.one in
     match alloc_frame (bpf_stack_size+6*8) (Ptrofs.repr (bpf_stack_size+0*8)) (Ptrofs.repr (bpf_stack_size+1*8))
       (Ptrofs.repr (bpf_stack_size+2*8)) (Ptrofs.repr (bpf_stack_size+3*8)) (Ptrofs.repr (bpf_stack_size+4*8)) (Ptrofs.repr (bpf_stack_size+5*8)) rs m with
     | None => Stuck
     | Some (rs', m') => Next (def_caller_save_regs rs')#PC <- target_pc m'
     end.
+*)
 
+Definition exec_call_internal (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
+  let n_stk := {|
+  stk_ra := Val.offset_ptr rs#PC Ptrofs.one;
+  stk_r6 := rs R6;
+  stk_r7 := rs R7;
+  stk_r8 := rs R8;
+  stk_r9 := rs R9;  
+|} :: c_stk in
+  Next
+    (def_caller_save_regs rs)
+      #PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)) n_stk m.
+
+(*
 Definition reload_callee_save_registers (ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
-  (bp: val) (rs: regset) (m: mem): option regset := 
+  (bp: val) (rs: regset) (c_stk: cstk) (m: mem): option regset := 
   match Mem.loadv Mptr m (Val.offset_ptr bp ofs_r6) with
   | None => None
   | Some v6 =>
@@ -861,7 +876,7 @@ Definition reload_callee_save_registers (ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
   end.
 
 Definition free_frame (sz: Z) (ofs_link ofs_ra ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptrofs)
-  (rs: regset) (m: mem): option (regset * mem) :=
+  (rs: regset) (c_stk: cstk) (m: mem): option (regset * mem) :=
   match Mem.loadv Mptr m (Val.offset_ptr rs#BP ofs_ra) with
   | None => None
   | Some ra =>
@@ -885,11 +900,24 @@ Definition free_frame (sz: Z) (ofs_link ofs_ra ofs_r6 ofs_r7 ofs_r8 ofs_r9: ptro
     end
   end.
 
-Definition exec_ret (rs: regset) (m: mem) :=
+Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
   match free_frame (bpf_stack_size+6*8) (Ptrofs.repr (bpf_stack_size+0*8)) (Ptrofs.repr (bpf_stack_size+1*8))
       (Ptrofs.repr (bpf_stack_size+2*8)) (Ptrofs.repr (bpf_stack_size+3*8)) (Ptrofs.repr (bpf_stack_size+4*8)) (Ptrofs.repr (bpf_stack_size+5*8)) rs m with
   | None => Stuck
   | Some (rs', m') => Next (undef_caller_save_regs rs') m'
+  end.
+*)
+Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
+  match c_stk with
+  | [] => Next (rs#PC <- Vnullptr) c_stk m (**r rs#R0 includes the return value *)
+  | h :: tl_stk =>
+    Next
+      (undef_caller_save_regs rs)
+      #PC <- (stk_ra h)
+      #R6 <- (stk_r6 h)
+      #R7 <- (stk_r7 h)
+      #R8 <- (stk_r8 h)
+      #R9 <- (stk_r9 h) tl_stk m
   end.
 
 (** Execution of a single instruction [i] in initial state
@@ -899,17 +927,17 @@ Definition exec_ret (rs: regset) (m: mem) :=
     given in the eBPF reference manuals.  For pseudo-instructions,
     refer to the informal descriptions given above. *)
 
-Definition exec_instr (i: instruction) (rs:regset) (m: mem) : outcome :=
+Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem) : outcome :=
   match i with
-  | Plddw r lo hi         => exec_lddw r lo hi rs m
-  | Pload k r r' o        => exec_load k r r' o rs m
-  | Pstore k r ri o       => exec_store k r ri o rs m
-  | Palu o w r ri         => exec_alu o w r ri rs m
-  | Pjmp32 o              => exec_jmp32 o rs m
-  | Pjmp64 i              => exec_jmp64 i rs m
-  | Pjmpcmp op w r ri o   => exec_jmpcmp w op r ri o rs m
-  | Pcall CallInternal i  => exec_call_internal i rs m
-  | Pret                  => exec_ret rs m
+  | Plddw r lo hi         => exec_lddw r lo hi rs c_stk m
+  | Pload k r r' o        => exec_load k r r' o rs c_stk m
+  | Pstore k r ri o       => exec_store k r ri o rs c_stk m
+  | Palu o w r ri         => exec_alu o w r ri rs c_stk m
+  | Pjmp32 o              => exec_jmp32 o rs c_stk m
+  | Pjmp64 i              => exec_jmp64 i rs c_stk m
+  | Pjmpcmp op w r ri o   => exec_jmpcmp w op r ri o rs c_stk m
+  | Pcall CallInternal i  => exec_call_internal i rs c_stk m
+  | Pret                  => exec_ret rs c_stk m
   | _                     => Stuck
   end.
 
@@ -927,7 +955,7 @@ Definition undef_caller_save_regs (rs: regset) : regset :=
     We exploit the calling conventions from module [Conventions], except that
     we use eBPF registers instead of locations. *)
 
-Inductive extcall_arg (rs: regset) (m: mem): loc -> val -> Prop :=
+Inductive extcall_arg (rs: regset) (c_stk: cstk) (m: mem): loc -> val -> Prop :=
   | extcall_arg_reg: forall r,
       extcall_arg rs m (R r) (rs (preg_of r))
   | extcall_arg_stack: forall ofs ty bofs v,
@@ -936,7 +964,7 @@ Inductive extcall_arg (rs: regset) (m: mem): loc -> val -> Prop :=
                 (Val.offset_ptr rs#BP (Ptrofs.repr bofs)) = Some v ->
       extcall_arg rs m (S Outgoing ofs ty) v.
 
-Inductive extcall_arg_pair (rs: regset) (m: mem): rpair loc -> val -> Prop :=
+Inductive extcall_arg_pair (rs: regset) (c_stk: cstk) (m: mem): rpair loc -> val -> Prop :=
   | extcall_arg_one: forall l v,
       extcall_arg rs m l v ->
       extcall_arg_pair rs m (One l) v
@@ -946,7 +974,7 @@ Inductive extcall_arg_pair (rs: regset) (m: mem): rpair loc -> val -> Prop :=
       extcall_arg_pair rs m (Twolong hi lo) (Val.longofwords vhi vlo).
 
 Definition extcall_arguments
-    (rs: regset) (m: mem) (sg: signature) (args: list val) : Prop :=
+    (rs: regset) (c_stk: cstk) (m: mem) (sg: signature) (args: list val) : Prop :=
   list_forall2 (extcall_arg_pair rs m) (loc_arguments sg) args.
 
 Definition loc_external_result (sg: signature) : rpair preg :=
@@ -956,7 +984,7 @@ Definition loc_external_result (sg: signature) : rpair preg :=
 (** Execution of the instruction at [rs PC]. *)
 
 Inductive tls_state: Type :=
-  | TLS_State: regset -> mem -> tls_state.
+  | TLS_State: regset -> cstk -> mem -> tls_state.
 
 Inductive eBPF_event : Set :=
   | eBPF_vload
@@ -977,52 +1005,48 @@ Definition exec_instr_event (i: instruction) : etrace :=
 
 Inductive step (c: code): tls_state -> etrace -> tls_state -> Prop :=
   | exec_step_internal:
-      forall b ofs i rs m rs' m' et,
+      forall b ofs i rs stk m rs' stk' m' et,
       rs PC = Vptr b ofs ->
       find_instr (Ptrofs.unsigned ofs) c = Some i ->
-      exec_instr i rs m = Next rs' m' ->
+      exec_instr i rs stk m = Next rs' stk' m' ->
       exec_instr_event i = et ->
-      step c (TLS_State rs m) et (TLS_State rs' m')
+      step c (TLS_State rs stk m) et (TLS_State rs' stk' m')
   | exec_step_external:
-      forall b ofs cty i res rs m rs' m',
+      forall b ofs cty i res rs stk m rs' m',
       rs PC = Vptr b ofs ->
       find_instr (Ptrofs.unsigned ofs) c = Some (Pcall cty i) ->
       cty = CallByBTF \/ cty = CallByStaticID ->
-      ebpf_call_function i rs#R1 rs#R2 rs#R3 rs#R4 rs#R5 (Next rs m) = Some (res, m') -> (**r an ebpf call may invoke another ebpf program that modifies the global memory *)
+      ebpf_call_function i rs#R1 rs#R2 rs#R3 rs#R4 rs#R5 (Next rs stk m) = Some (res, m') -> (**r an ebpf call may invoke another ebpf program that modifies the global memory *)
       rs' = nextinstr (undef_caller_save_regs rs)
                 #R0 <- res
                 #PC <- (Val.offset_ptr (rs#PC) Ptrofs.one) ->
-      step c (TLS_State rs m) [eBPF_ext_call] (TLS_State rs' m') (*
-  | exec_step_external:
-      forall b ef args res rs m t rs' m',
-      rs PC = Vptr b Ptrofs.zero ->
-      Genv.find_funct_ptr ge b = Some (External ef) ->
-      external_call ef ge args m t res m' ->
-      extcall_arguments rs m (ef_sig ef) args ->
-      rs' = (set_pair (loc_external_result (ef_sig ef) ) res (undef_caller_save_regs rs)) #PC <- (rs RA) ->
-      step (State rs m) t (State rs' m') *)
+      step c (TLS_State rs stk m) [eBPF_ext_call] (TLS_State rs' stk m')
       .
 
 
-Inductive initial_lst_state (p: program) (ctx blk stk: block): tls_state -> Prop :=
+Inductive initial_lst_state (ctx blk stk: block): tls_state -> Prop :=
   | initial_lst_state_intro: forall m0,
       let rs0 :=
         (Pregmap.init Vundef)
           # PC <- (Vptr blk Ptrofs.zero)
-          # R10 <- (Vptr stk Ptrofs.zero)
+          # R10 <- (Vptr stk (Ptrofs.repr bpf_stack_size))
           # R1 <- (Vptr ctx Ptrofs.zero)
           # BP  <- Vnullptr in
+      (forall i, 0<= i -> i < bpf_stack_size -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512) *)
+      (*    
       (forall i, 0<= i -> i < bpf_stack_size+6*8 -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512*8) *)
       (forall i, 0<= i -> i < bpf_stack_size \/ (i <= bpf_stack_size+2*8 /\ i < bpf_stack_size+6*8) -> Mem.load Mint8unsigned m0 blk i = Some Vundef) -> (**r the init content of [0, 512) + r6-r9 are all Vundef *)
       Mem.load Mint64 m0 blk bpf_stack_size = Some Vnullptr -> (**r the init old_ra is Vnullptr *)
-      Mem.load Mint64 m0 blk (bpf_stack_size+1*8) = Some Vnullptr -> (**r the init old_sp is Vnullptr *)
-      initial_lst_state p ctx blk stk (TLS_State rs0 m0).
+      Mem.load Mint64 m0 blk (bpf_stack_size+1*8) = Some Vnullptr -> (**r the init old_sp is Vnullptr *) *)
+      initial_lst_state ctx blk stk (TLS_State rs0 [] m0).
 
-Inductive final_lst_state: tls_state -> int64 -> Prop :=
+(*
+Inductive final_lst_state (stk: block): tls_state -> int -> Prop :=
   | final_lst_state_intro: forall rs m r,
       rs PC = Vnullptr ->
-      rs R0 = Vlong r ->
-      final_lst_state (TLS_State rs m) r.
+      rs R0 = Vlong r Vptr stk (Ptrofs.repr bpf_stack_size) ->
+      rs R10 = Vptr stk (Ptrofs.repr bpf_stack_size) ->
+      final_lst_state stk (TLS_State rs [] m) r. *)
 
 
  (** The global memory model for all eBPF programs, it splits into:
@@ -1073,7 +1097,7 @@ Definition chunk_of_width (w: width) :=
   | W64 => Mint64
   end.
 
-Definition exec_atomic_store (w: width) (aty: atomic_type) (dst src: ireg) (o : off) (rs:regset) (m: mem): outcome :=
+Definition exec_atomic_store (w: width) (aty: atomic_type) (dst src: ireg) (o : off) (rs:regset) (stk: cstk) (m: mem): outcome :=
   let addr := Val.offset_ptr (rs dst) o in
   let sv := match w with W32 => Val.loword (rs src) | W64 => rs src end in
     match Mem.loadv (chunk_of_width w) m addr with
@@ -1082,13 +1106,13 @@ Definition exec_atomic_store (w: width) (aty: atomic_type) (dst src: ireg) (o : 
       let res := (atomic_fun w aty v sv) in
         match Mem.storev (chunk_of_width w) m addr res with
         | None => Stuck
-        | Some m' => Next (nextinstr rs) m'
+        | Some m' => Next (nextinstr rs) stk m'
         end
     end.
 
-Definition exec_atomic (w: width) (aty: atomic_type) (dst: ireg) (src: ireg+imm) (o : off) (rs:regset) (m: mem): outcome :=
+Definition exec_atomic (w: width) (aty: atomic_type) (dst: ireg) (src: ireg+imm) (o : off) (rs:regset) (stk: cstk) (m: mem): outcome :=
   match src with
-  | inl r => exec_atomic_store w aty dst r o rs m
+  | inl r => exec_atomic_store w aty dst r o rs stk m
   | _ => Stuck
   end. 
 
@@ -1097,12 +1121,12 @@ Definition exec_atomic_instr_event (aty: atomic_type): etrace :=
 
 Inductive atomic_step (c: code): tls_state -> etrace -> tls_state -> Prop :=
   | exec_atomic_step:
-      forall b ofs rs m rs' m' et aty w dst src o,
+      forall b ofs rs stk m rs' stk' m' et aty w dst src o,
       rs PC = Vptr b ofs ->
       find_instr (Ptrofs.unsigned ofs) c = Some (Patomic aty dst src o) ->
-      exec_atomic w aty dst src o rs m = Next rs' m' ->
+      exec_atomic w aty dst src o rs stk m = Next rs' stk' m' ->
       exec_atomic_instr_event aty = et ->
-        atomic_step c (TLS_State rs m) et (TLS_State rs' m').
+        atomic_step c (TLS_State rs stk m) et (TLS_State rs' stk' m').
   (*
   | Switch_step: forall tp cid gm d cid' s s',
     (tp_map tp) cid = Some s -> (* valid eBPF thread id *)
@@ -1117,17 +1141,17 @@ Inductive atomic_step (c: code): tls_state -> etrace -> tls_state -> Prop :=
 Section eBPF_GlobalSem.
 
 Inductive nstep: tid -> state -> etrace -> state -> Prop :=
-  | Core_step: forall tp cid ge gm d et rs tp' rs' gm' blk,
+  | Core_step: forall tp cid ge gm d et rs stk tp' rs' stk' gm' blk,
     (tp_map tp) cid = Some (rs, blk) ->
     update_core tp cid rs' = tp' ->
-    step (ge blk) (TLS_State rs gm) et (TLS_State rs' gm') ->
+    step (ge blk) (TLS_State rs stk gm) et (TLS_State rs' stk' gm') ->
       nstep cid (mkBuild_state tp ge gm d) et 
                 (mkBuild_state tp' ge gm' d).
 
 Inductive astep: tid -> state -> etrace -> state -> Prop :=
-  | At_step: forall tp cid ge gm d et rs tp' rs' gm' blk,
+  | At_step: forall tp cid ge gm d et rs stk tp' rs' stk' gm' blk,
     (tp_map tp) cid = Some (rs, blk) ->
-    atomic_step (ge blk) (TLS_State rs gm) et (TLS_State rs' gm') ->
+    atomic_step (ge blk) (TLS_State rs stk gm) et (TLS_State rs' stk' gm') ->
       astep cid (mkBuild_state tp ge gm d) et 
                 (mkBuild_state tp' ge gm' d).
 
