@@ -439,7 +439,7 @@ Definition eval_div_s64 (v1 v2:val) : val :=
 Definition eval_mod_u32 (v1 v2:val) : val :=
   match Val.modu v1 v2 with
   | Some res => res
-  | None => if Val.eq v2 Vzero then v1 else Vundef
+  | None => if Val.eq v2 Vzero then v1 else (** unreachable *) Vundef
   end.
 
 Definition eval_mod_s32 (v1 v2:val) : val :=
@@ -448,13 +448,13 @@ Definition eval_mod_s32 (v1 v2:val) : val :=
   | None =>
     if Val.eq v2 Vzero then v1 
     else if (Val.eq v2 (Vint Int.mone)) && (Val.eq v1 INT_MIN) then Vzero
-    else Vundef
+    else (** unreachable *) Vundef
   end.
 
 Definition eval_mod_u64 (v1 v2:val) : val :=
   match Val.modlu v1 v2 with
   | Some res => res
-  | None => if Val.eq v2 (Vlong Int64.zero) then v1 else Vundef
+  | None => if Val.eq v2 (Vlong Int64.zero) then v1 else (** unreachable *) Vundef
   end.
 
 Definition eval_mod_s64 (v1 v2:val) : val :=
@@ -463,7 +463,7 @@ Definition eval_mod_s64 (v1 v2:val) : val :=
   | None =>
     if Val.eq v2 (Vlong Int64.zero) then v1
     else if (Val.eq v2 (Vlong Int64.mone)) && (Val.eq v1 LLONG_MIN) then Vlong Int64.zero
-    else Vundef
+    else (** unreachable *) Vundef
   end.
 
   (** RFC9669: 4.1. Arithmetic Instructions
@@ -576,12 +576,19 @@ Definition swapn (s: endSize) :=
   | S64 => swab64
   end.
 
+Definition eval_end_trunction (s: endSize) (v: int64) : int64 :=
+  match s with
+  | S16 => Int64.zero_ext 16 v
+  | S32 => Int64.zero_ext 32 v
+  | S64 => v
+  end.
+
 Definition eval_end (e:endOp) (s: endSize) (v: val) : val :=
   match v with
   | Vlong vl => Vlong
     match e with
-    | LE32 => if Archi.big_endian then (swapn s) vl else vl
-    | BE32 => if Archi.big_endian then vl else (swapn s) vl
+    | LE32 => if Archi.big_endian then (swapn s) vl else eval_end_trunction s vl
+    | BE32 => if Archi.big_endian then eval_end_trunction s vl else (swapn s) vl
     | LE64 => (swapn s) vl
     end
   | _ => Vundef
@@ -750,9 +757,50 @@ Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: reg
   | Some m' => Next (nextinstr rs) c_stk m'
   end.
 
-Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
-  let v := Vlong (Int64.ofwords hi  lo) in
-    Next (nextinstr (nextinstr (rs#r <- v))) c_stk m.
+Record addr_region := {
+  base_blk: block;
+  size_blk: Z;
+  base_addr: int64;
+}.
+
+Fixpoint find_abstract_address (v: int64) (addr_map: list addr_region): option val :=
+  match addr_map with
+  | [] => None
+  | h :: t =>
+    let upper := Int64.add (base_addr h) (Int64.repr (size_blk h)) in
+    let ofs   := Ptrofs.of_int64 (Int64.sub v (base_addr h)) in
+      if (Int64.cmpu Cle (base_addr h) v) && (Int64.cmpu Clt v upper) then
+        Some (Vptr (base_blk h) ofs)
+      else
+        find_abstract_address v t
+  end.
+
+Fixpoint cast_i2p_aux (v: int64) (b: block) (ofs: ptrofs) (l_ptr: list int64) (addr_map: list addr_region) : option val :=
+  match l_ptr with
+  | [] => None
+  | h :: tl =>
+    if Int64.eq h (Ptrofs.to_int64 ofs) then
+      (** for eBPF program, instruction [i.e. LDDW (+ external call for the validation purpose)] at pc: the result should be computed as a pointer *)
+      find_abstract_address v addr_map
+    else
+      cast_i2p_aux v b ofs tl addr_map
+  end.
+
+Definition cast_i2p (v: int64) (pc: val) (l_ptr: list int64) (addr_map: list addr_region): bool * (option val) :=
+  match pc with
+  | Vptr b ofs => (true, cast_i2p_aux v b ofs l_ptr addr_map)
+  | _ => (false, None)
+  end.
+
+Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (c_stk: cstk) (m: mem) (l_ptr: list int64)  (addr_map: list addr_region) :=
+  let v := Int64.ofwords hi lo in
+    match cast_i2p v (rs PC) l_ptr addr_map with
+    | (false, _) => Stuck (** something is wrong *)
+    | (true, None) => (** it is a int64 *)
+      Next (nextinstr (nextinstr (rs#r <- (Vlong v)))) c_stk m
+    | (true, Some vp) => (** it is a vptr b ofs *)
+      Next (nextinstr (nextinstr (rs#r <- vp))) c_stk m
+    end.
 
 (** Undefine all ebpf caller-saved registers: i.e. R1 to R5 *)
 Definition undef_caller_save_regs (rs: regset) : regset :=
@@ -941,9 +989,9 @@ Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
     given in the eBPF reference manuals.  For pseudo-instructions,
     refer to the informal descriptions given above. *)
 
-Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem) : outcome :=
+Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem)  (l_ptr: list int64) (addr_map: list addr_region) : outcome :=
   match i with
-  | Plddw r lo hi         => exec_lddw r lo hi rs c_stk m
+  | Plddw r lo hi         => exec_lddw r lo hi rs c_stk m l_ptr addr_map
   | Pload k r r' o        => exec_load k r r' o rs c_stk m
   | Pstore k r ri o       => exec_store k r ri o rs c_stk m
   | Palu o w r ri         => exec_alu o w r ri rs c_stk m
@@ -1017,14 +1065,14 @@ Definition exec_instr_event (i: instruction) : etrace :=
   | _                     => eE0
   end.
 
-Inductive step (c: code): tls_state -> etrace -> tls_state -> Prop :=
+Inductive step (l_ptr: list int64) (addr_map: list addr_region) (c: code): tls_state -> etrace -> tls_state -> Prop :=
   | exec_step_internal:
       forall b ofs i rs stk m rs' stk' m' et,
       rs PC = Vptr b ofs ->
       find_instr (Ptrofs.unsigned ofs) c = Some i ->
-      exec_instr i rs stk m = Next rs' stk' m' ->
+      exec_instr i rs stk m l_ptr addr_map = Next rs' stk' m' ->
       exec_instr_event i = et ->
-      step c (TLS_State rs stk m) et (TLS_State rs' stk' m')
+      step l_ptr addr_map c (TLS_State rs stk m) et (TLS_State rs' stk' m')
   | exec_step_external:
       forall b ofs cty i res rs stk m rs' m',
       rs PC = Vptr b ofs ->
@@ -1034,7 +1082,7 @@ Inductive step (c: code): tls_state -> etrace -> tls_state -> Prop :=
       rs' = nextinstr (undef_caller_save_regs rs)
                 #R0 <- res
                 #PC <- (Val.offset_ptr (rs#PC) Ptrofs.one) ->
-      step c (TLS_State rs stk m) [eBPF_ext_call] (TLS_State rs' stk m')
+      step l_ptr addr_map c (TLS_State rs stk m) [eBPF_ext_call] (TLS_State rs' stk m')
       .
 
 
@@ -1156,10 +1204,10 @@ Inductive atomic_step (c: code): tls_state -> etrace -> tls_state -> Prop :=
 Section eBPF_GlobalSem.
 
 Inductive nstep: tid -> state -> etrace -> state -> Prop :=
-  | Core_step: forall tp cid ge gm d et rs stk tp' rs' stk' gm' blk,
+  | Core_step: forall tp cid ge gm d et rs stk tp' rs' stk' gm' blk l_ptr addr_map,
     (tp_map tp) cid = Some (rs, blk) ->
     update_core tp cid rs' = tp' ->
-    step (ge blk) (TLS_State rs stk gm) et (TLS_State rs' stk' gm') ->
+    step l_ptr addr_map (ge blk) (TLS_State rs stk gm) et (TLS_State rs' stk' gm') ->
       nstep cid (mkBuild_state tp ge gm d) et 
                 (mkBuild_state tp' ge gm' d).
 
