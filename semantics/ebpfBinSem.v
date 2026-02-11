@@ -737,10 +737,16 @@ Definition load (k: sizeOp) (addr:val) (m: mem) :=
   | DBWord     => if Archi.ptr64 then Mem.loadv Mint64 m addr else None
   end.
 
+Definition load_value_casting (v: val): val :=
+  match v with
+  | Vint i => Vlong (Int64.repr (Int.unsigned i))
+  | _ => v
+  end.
+  
 Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
   match load k (Val.offset_ptr rs#r' o) m with
   | None => Stuck
-  | Some v => Next (nextinstr (rs#r <- v)) c_stk m
+  | Some v => Next (nextinstr (rs#r <- (load_value_casting v))) c_stk m
   end.
 
 Definition store (k: sizeOp) (addr:val) (v:val) (m: mem) :=
