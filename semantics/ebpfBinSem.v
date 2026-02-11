@@ -783,7 +783,7 @@ Fixpoint find_abstract_address (v: int64) (addr_map: list addr_region): option v
 
 Fixpoint cast_i2p_aux (v: int64) (b: block) (ofs: ptrofs) (l_ptr: list int64) (addr_map: list addr_region) : option val :=
   match l_ptr with
-  | [] => None
+  | [] => Some (Vlong v)
   | h :: tl =>
     if Int64.eq h (Ptrofs.to_int64 ofs) then
       (** for eBPF program, instruction [i.e. LDDW (+ external call for the validation purpose)] at pc: the result should be computed as a pointer *)
