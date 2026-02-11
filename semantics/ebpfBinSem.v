@@ -1095,13 +1095,13 @@ Inductive step (l_ptr: list int64) (addr_map: list addr_region) (c: code): tls_s
 
 
 Inductive initial_lst_state (ctx blk stk: block): tls_state -> Prop :=
-  | initial_lst_state_intro: forall m0,
-      let rs0 :=
+  | initial_lst_state_intro: forall m0 rs0,
+      rs0 =
         (Pregmap.init Vundef)
           # PC <- (Vptr blk Ptrofs.zero)
           # R10 <- (Vptr stk (Ptrofs.repr bpf_stack_size))
           # R1 <- (Vptr ctx Ptrofs.zero)
-          (* # BP  <- Vnullptr *) in
+          (* # BP  <- Vnullptr *) ->
       (forall i, 0<= i -> i < bpf_stack_size -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512) *)
       (*    
       (forall i, 0<= i -> i < bpf_stack_size+6*8 -> Mem.valid_access m0 Mint8unsigned stk i Freeable) -> (**r access to [0, 512*8) *)
@@ -1117,8 +1117,52 @@ Inductive final_lst_state (stk: block): tls_state -> val -> Prop :=
       rs R0 = r ->
       (match r with | Vlong _ | Vptr _ _ => True | _ => False end) ->
       rs R10 = Vptr stk (Ptrofs.repr bpf_stack_size) ->
+      (forall i, 0<= i -> i < bpf_stack_size -> Mem.valid_access m Mint8unsigned stk i Freeable) ->
       final_lst_state stk (TLS_State rs [] m) r.
 
+Definition is_final_state (stk_blk: block) (rs: regset) (m: mem) (stk : cstk): bool :=
+  let pc_b :=
+    match rs PC with
+    | Vlong i => (Int64.eq i Int64.zero) && Archi.ptr64
+    | Vint i => if Archi.ptr64 then false else (Int.eq i Int.zero)
+    | _ => false
+    end in
+  let r0_b :=
+    match rs R0 with
+    | Vlong _ | Vptr _ _ => true
+    | _ => false
+    end in
+  let r10_b :=
+    match rs R10 with
+    | Vptr b ofs => Pos.eqb b stk_blk && Ptrofs.eq ofs (Ptrofs.repr 512%Z)
+    | _ => false
+    end in
+    match stk with
+    | [] => pc_b && r0_b && r10_b
+    | _ => false
+    end
+  (** we don't check the memory here *)
+.
+
+Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: list byte) (st: outcome) (l_ptr: list int64) (addr_map: list addr_region) (stk_blk: block): option val :=
+  match fuel with
+  | O => None (* assume we have enough fuel *)
+  | S k =>
+    match st with
+    | Stuck => None
+    | Next rs stk m =>
+      if is_final_state stk_blk rs m stk then Some (rs R0)
+      else
+        match rs PC with
+        | Vptr b ofs =>
+          match find_instr (Ptrofs.unsigned ofs) bpf_prog with
+          | None => None
+          | Some i => bpf_interpreter k bpf_prog (exec_instr i rs stk m l_ptr addr_map) l_ptr addr_map stk_blk
+          end
+        | _ => None
+        end
+    end
+  end.
 
  (** The global memory model for all eBPF programs, it splits into:
  - local memory, like eBPF stack or program-local array, only accessed by eBPF load/store instructions
