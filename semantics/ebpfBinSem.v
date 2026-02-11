@@ -731,10 +731,11 @@ Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) 
 
 Definition load (k: sizeOp) (addr:val) (m: mem) :=
   match k with
-  | Byte => Mem.loadv Mint8unsigned m addr
-  | HalfWord => Mem.loadv Mint16unsigned m addr
-  | Word     => Mem.loadv Mint32 m addr
-  | DBWord     => if Archi.ptr64 then Mem.loadv Mint64 m addr else None
+  | Byte      => Mem.loadv Mint8unsigned m addr
+  | HalfWord  => Mem.loadv Mint16unsigned m addr
+  | Word      => Mem.loadv Mint32 m addr
+  | DBWord    => Mem.loadv Mint64 m addr
+  (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
   end.
 
 Definition load_value_casting (v: val): val :=
@@ -751,14 +752,15 @@ Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) 
 
 Definition store (k: sizeOp) (addr:val) (v:val) (m: mem) :=
   match k with
-  | Byte => Mem.storev Mint8unsigned m addr v
-  | HalfWord => Mem.storev Mint16unsigned m addr v
-  | Word     => Mem.storev Mint32 m addr v
-  | DBWord     => if Archi.ptr64 then Mem.storev Mint64 m addr v else None
+  | Byte      => Mem.storev Mint8unsigned m addr v
+  | HalfWord  => Mem.storev Mint16unsigned m addr v
+  | Word      => Mem.storev Mint32 m addr v
+  | DBWord    => Mem.storev Mint64 m addr v
+  (*if Archi.ptr64 then Mem.storev Mint64 m addr v else None *)
   end.
 
 Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
-  match store  k (Val.offset_ptr rs#r o) (eval_reg_immw (sizew k) rs ri) m with
+  match store k (Val.offset_ptr rs#r o) (eval_reg_immw (sizew k) rs ri) m with
   | None => Stuck
   | Some m' => Next (nextinstr rs) c_stk m'
   end.
