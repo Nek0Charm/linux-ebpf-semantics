@@ -72,6 +72,10 @@ Definition is_abstract_value_concrete_eq (av: val) (cv: int64) (addr_map: list a
     | None => false
     | Some i => Int64.eq cv i
     end
+  | Vundef => true
+  (** the Coq model will set some register value to Vundef while the Linux eBPF C version will give arbitrary value: for exmaple, 
+  - the initial state of Coq version set most register to Vundef, while the C version will be zero (?) 
+  - And the internal call produce finishes, r1-r5 are Vundef at Coq, but we don't know the value of C version (?may the old register value?)  *)
   | _ => false
   end.
 
