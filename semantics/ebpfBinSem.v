@@ -219,7 +219,7 @@ Inductive instruction : Type :=
 .
 
 
-Definition code := list byte (*instruction *).
+Definition code := list int64 (*instruction *).
 Record function : Type := mkfunction {fn_sig: signature; fn_stksz: Z; fn_code: code}.
 Definition fundef := AST.fundef function.
 Definition program := AST.program fundef unit.
@@ -1144,7 +1144,7 @@ Definition is_final_state (stk_blk: block) (rs: regset) (m: mem) (stk : cstk): b
   (** we don't check the memory here *)
 .
 
-Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: list byte) (st: outcome) (l_ptr: list int64) (addr_map: list addr_region) (stk_blk: block): option val :=
+Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: list int64) (st: outcome) (l_ptr: list int64) (addr_map: list addr_region) (stk_blk: block): option val :=
   match fuel with
   | O => None (* assume we have enough fuel *)
   | S k =>

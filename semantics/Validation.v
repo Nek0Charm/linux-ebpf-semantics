@@ -9,7 +9,7 @@ Import ListNotations.
 
 
 Axiom find_instr: Z -> code -> option instruction.
-Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: list byte) (st: outcome) (l_ptr: list int64)  (addr_map: list addr_region): outcome :=
+Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: list int64) (st: outcome) (l_ptr: list int64)  (addr_map: list addr_region): outcome :=
   match fuel with
   | O => Stuck (* assume we have enough fuel *)
   | S k =>
@@ -124,7 +124,7 @@ Definition compare_trace_at_pc (rs: regset) (trace: list int64) (addr_map: list 
   compare_trace_at_pc_aux R10 rs trace addr_map.
 
 Fixpoint bpf_interpreter_trace_check (fuel: nat) (l_ptr: list int64)  (addr_map: list addr_region) (init_sp: int64)  
-  (bpf_prog: list byte) (trace: list (list int64)) (st: outcome): bool :=
+  (bpf_prog: list int64) (trace: list (list int64)) (st: outcome): bool :=
   match fuel with
   | O => false (* assume we have fenouagh fuell *)
   | S k =>
@@ -178,7 +178,7 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Definition semantics_validation_aux (bpf_prog: list byte) (trace: list (list int64)) (l_ptr: list int64) (ctx_base r10_base : int64): bool :=
+Definition semantics_validation_aux (bpf_prog: list int64) (trace: list (list int64)) (l_ptr: list int64) (ctx_base r10_base : int64): bool :=
   (** assume some information, only for testing *)
   let fuel := 1000 %nat in (* fixed fuel *)
   let ctx_size := 1000 %Z in (* fixed context memort size *)
@@ -213,7 +213,7 @@ Definition semantics_validation_aux (bpf_prog: list byte) (trace: list (list int
     bpf_interpreter_trace_check fuel l_ptr addr_map r10_base bpf_prog trace (Next rs [] m3).
 
 (** trace stores [R0-R10] values executed by core.c of Linux eBPF VM *)
-Definition semantics_validation (bpf_prog: list byte) (trace: list (list int64)) (l_ptr: list int64): bool :=
+Definition semantics_validation (bpf_prog: list int64) (trace: list (list int64)) (l_ptr: list int64): bool :=
   match trace with
   | [] => false
   | h :: t =>
