@@ -26,6 +26,8 @@ Inductive ireg: Type := R0 | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9
 Lemma ireg_eq: forall (x y: ireg), {x=y} + {x<>y}.
 Proof. decide equality. Defined.
 
+Definition ireg_eqb (x y: ireg) : bool :=
+  if ireg_eq x y then true else false.
 
 Definition caller_saved_registers: list ireg := [R1; R2; R3; R4; R5].
 Definition callee_saved_registers: list ireg := [R6; R7; R8; R9].

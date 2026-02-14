@@ -7,8 +7,510 @@ From bpf.ebpf Require Import ebpfBinSem.
 
 Import ListNotations.
 
+Definition get_sub_insn (ins: int64) (from size: nat): int64 :=
+  Int64.unsigned_bitfield_extract (Z.of_nat from) (Z.of_nat size) ins.
 
-Axiom find_instr: Z -> code -> option instruction.
+Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.int) (imm : int) : option instruction :=
+  match (Byte.unsigned opcode) with
+  (* Palu *)
+  | 0x04 => Some (Palu ADD W32 dst_reg (inr imm))
+  | 0x07 => Some (Palu ADD W64 dst_reg (inr imm))
+  | 0x0c => Some (Palu ADD W32 dst_reg (inl src_reg))
+  | 0x0f => Some (Palu ADD W64 dst_reg (inl src_reg))
+  | 0x14 => Some (Palu SUB W32 dst_reg (inr imm))
+  | 0x17 => Some (Palu SUB W64 dst_reg (inr imm))
+  | 0x1c => Some (Palu SUB W32 dst_reg (inl src_reg))
+  | 0x1f => Some (Palu SUB W64 dst_reg (inl src_reg))
+  | 0x24 => Some (Palu MUL W32 dst_reg (inr imm))
+  | 0x27 => Some (Palu MUL W64 dst_reg (inr imm))
+  | 0x2c => Some (Palu MUL W32 dst_reg (inl src_reg))
+  | 0x2f => Some (Palu MUL W64 dst_reg (inl src_reg))
+  | 0x34 =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu DIV W32 dst_reg (inr imm))
+    | 1 => Some (Palu SDIV W32 dst_reg (inr imm))
+    | _ => None
+    end
+  | 0x37 =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu DIV W64 dst_reg (inr imm))
+    | 1 => Some (Palu SDIV W64 dst_reg (inr imm))
+    | _ => None
+    end
+  | 0x3c =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu DIV W32 dst_reg (inl src_reg))
+    | 1 => Some (Palu SDIV W32 dst_reg (inl src_reg))
+    | _ => None
+    end
+  | 0x3f =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu DIV W64 dst_reg (inl src_reg))
+    | 1 => Some (Palu SDIV W64 dst_reg (inl src_reg))
+    | _ => None
+    end
+  | 0x44 => Some (Palu OR W32 dst_reg (inr imm))
+  | 0x47 => Some (Palu OR W64 dst_reg (inr imm))
+  | 0x4c => Some (Palu OR W32 dst_reg (inl src_reg))
+  | 0x4f => Some (Palu OR W64 dst_reg (inl src_reg))
+  | 0x54 => Some (Palu AND W32 dst_reg (inr imm))
+  | 0x57 => Some (Palu AND W64 dst_reg (inr imm))
+  | 0x5c => Some (Palu AND W32 dst_reg (inl src_reg))
+  | 0x5f => Some (Palu AND W64 dst_reg (inl src_reg))
+  | 0x64 => Some (Palu LSH W32 dst_reg (inr imm))
+  | 0x67 => Some (Palu LSH W64 dst_reg (inr imm))
+  | 0x6c => Some (Palu LSH W32 dst_reg (inl src_reg))
+  | 0x6f => Some (Palu LSH W64 dst_reg (inl src_reg))
+  | 0x74 => Some (Palu RSH W32 dst_reg (inr imm))
+  | 0x77 => Some (Palu RSH W64 dst_reg (inr imm))
+  | 0x7c => Some (Palu RSH W32 dst_reg (inl src_reg))
+  | 0x7f => Some (Palu RSH W64 dst_reg (inl src_reg))
+  | 0x84 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Palu NEG W32 dst_reg (inr imm))
+    else
+      None
+  | 0x87 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Palu NEG W64 dst_reg (inr imm))
+    else
+      None
+  | 0x94 =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu MOD W32 dst_reg (inr imm))
+    | 1 => Some (Palu SMOD W32 dst_reg (inr imm))
+    | _ => None
+    end
+  | 0x97 =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu MOD W64 dst_reg (inr imm))
+    | 1 => Some (Palu SMOD W64 dst_reg (inr imm))
+    | _ => None
+    end
+  | 0x9c =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu MOD W32 dst_reg (inl src_reg))
+    | 1 => Some (Palu SMOD W32 dst_reg (inl src_reg))
+    | _ => None
+    end
+  | 0x9f =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu MOD W64 dst_reg (inl src_reg))
+    | 1 => Some (Palu SMOD W64 dst_reg (inl src_reg))
+    | _ => None
+    end
+  | 0xa4 => Some (Palu XOR W32 dst_reg (inr imm))
+  | 0xa7 => Some (Palu XOR W64 dst_reg (inr imm))
+  | 0xac => Some (Palu XOR W32 dst_reg (inl src_reg))
+  | 0xaf => Some (Palu XOR W64 dst_reg (inl src_reg))
+  | 0xb4 => Some (Palu MOV W32 dst_reg (inr imm))
+  | 0xb7 => Some (Palu MOV W64 dst_reg (inr imm))
+  | 0xbc =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu MOV W32 dst_reg (inl src_reg))
+    | 8 => Some (Palu (MOVSX SZ8) W32 dst_reg (inl src_reg))
+    | 16 => Some (Palu (MOVSX SZ16) W32 dst_reg (inl src_reg))
+    | _ => None
+    end
+  | 0xbf =>
+    match (Ptrofs.signed off) with
+    | 0 => Some (Palu MOV W64 dst_reg (inl src_reg))
+    | 8 => Some (Palu (MOVSX SZ8) W64 dst_reg (inl src_reg))
+    | 16 => Some (Palu (MOVSX SZ16) W64 dst_reg (inl src_reg))
+    | 32 => Some (Palu (MOVSX SZ32) W64 dst_reg (inl src_reg))
+    | _ => None
+    end
+  | 0xc4 => Some (Palu ARSH W32 dst_reg (inr imm))
+  | 0xc7 => Some (Palu ARSH W64 dst_reg (inr imm))
+  | 0xcc => Some (Palu ARSH W32 dst_reg (inl src_reg))
+  | 0xcf => Some (Palu ARSH W64 dst_reg (inl src_reg))
+  | 0xd4 =>
+    if (ireg_eqb src_reg R0) then
+      match (Int.signed imm) with
+      | 0x10 => Some (Palu (END LE32 S16) W32 dst_reg (inr imm))
+      | 0x20 => Some (Palu (END LE32 S32) W64 dst_reg (inr imm))
+      | 0x40 => Some (Palu (END LE32 S64) W32 dst_reg (inr imm))
+      | _ => None
+      end
+    else
+      None
+  | 0xd7 =>
+    if (ireg_eqb src_reg R0) then
+      match (Int.signed imm) with
+      | 0x10 => Some (Palu (END LE64 S16) W32 dst_reg (inr imm))
+      | 0x20 => Some (Palu (END LE64 S32) W64 dst_reg (inr imm))
+      | 0x40 => Some (Palu (END LE64 S64) W32 dst_reg (inr imm))
+      | _ => None
+      end
+    else
+      None
+  | 0xdc =>
+    if (ireg_eqb src_reg R0) then
+      match (Int.signed imm) with
+      | 0x10 => Some (Palu (END BE32 S16) W32 dst_reg (inr imm))
+      | 0x20 => Some (Palu (END BE32 S32) W64 dst_reg (inr imm))
+      | 0x40 => Some (Palu (END BE32 S64) W32 dst_reg (inr imm))
+      | _ => None
+      end
+    else
+      None
+  (* Pjmp32 + Pjmp64 *)
+  | 0x05 =>
+    if (ireg_eqb src_reg R0 && Z.eqb (Int.signed imm) 0) then
+      Some (Pjmp64 off)
+    else
+      None
+  | 0x06 =>
+    if (ireg_eqb src_reg R0 && Z.eqb (Ptrofs.signed off) 0) then
+      Some (Pjmp32 imm)
+    else
+      None
+  (* Pjmpcmp *)
+  | 0x15 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp EQ W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0x16 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp EQ W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0x1d =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp EQ W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x1e =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp EQ W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x25 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GT Unsigned) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0x26 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GT Unsigned) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0x2d =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GT Unsigned) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x2e =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GT Unsigned) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x35 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GE Unsigned) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0x36 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GE Unsigned) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0x3d =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GE Unsigned) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x3e =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GE Unsigned) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x45 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp SET W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0x46 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp SET W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0x4d =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp SET W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x4e =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp SET W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x55 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp NE W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0x56 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp NE W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0x5d =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp NE W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x5e =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp NE W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x65 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GT Signed) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0x66 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GT Signed) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0x6d =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GT Signed) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x6e =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GT Signed) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x75 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GE Signed) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0x76 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (GE Signed) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0x7d =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GE Signed) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x7e =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (GE Signed) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xa5 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LT Unsigned) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0xa6 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LT Unsigned) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0xad =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LT Unsigned) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xae =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LT Unsigned) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xb5 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LE Unsigned) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0xb6 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LE Unsigned) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0xbd =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LE Unsigned) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xbe =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LE Unsigned) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xc5 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LT Signed) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0xc6 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LT Signed) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0xcd =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LT Signed) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xce =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LT Signed) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xd5 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LE Signed) W64 dst_reg (inr imm) off)
+    else
+      None
+  | 0xd6 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pjmpcmp (LE Signed) W32 dst_reg (inr imm) off)
+    else
+      None
+  | 0xdd =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LE Signed) W64 dst_reg (inl src_reg) off)
+    else
+      None
+  | 0xde =>
+    if Z.eqb (Int.signed imm) 0 then
+      Some (Pjmpcmp (LE Signed) W32 dst_reg (inl src_reg) off)
+    else
+      None
+  (* Pret *)
+  | 0x95 =>
+    if (ireg_eqb src_reg R0 && Z.eqb (Int.signed imm) 0 && Z.eqb (Ptrofs.signed off) 0) then
+      Some Pret
+    else
+      None
+  (* Pcall *)
+  | 0x85 =>
+    if (Z.eqb (Ptrofs.signed off) 0) then
+      match src_reg with
+      | R1 => Some (Pcall CallInternal imm)
+      | _ => None
+      end
+    else
+      None
+  (* Pload *)
+  | 0x61 =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pload Word dst_reg src_reg off)
+    else
+      None
+  | 0x69 =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pload HalfWord dst_reg src_reg off)
+    else
+      None
+  | 0x71 =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pload Byte dst_reg src_reg off)
+    else
+      None
+  | 0x79 =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pload DBWord dst_reg src_reg off)
+    else
+      None
+  (* Pstore *)
+  | 0x62 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pstore Word dst_reg (inr imm) off)
+    else
+      None
+  | 0x63 =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pstore Word dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x6a =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pstore HalfWord dst_reg (inr imm) off)
+    else
+      None
+  | 0x6b =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pstore HalfWord dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x72 =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pstore Byte dst_reg (inr imm) off)
+    else
+      None
+  | 0x73 =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pstore Byte dst_reg (inl src_reg) off)
+    else
+      None
+  | 0x7a =>
+    if (ireg_eqb src_reg R0) then
+      Some (Pstore DBWord dst_reg (inr imm) off)
+    else
+      None
+  | 0x7b =>
+    if (Z.eqb (Int.signed imm) 0) then
+      Some (Pstore DBWord dst_reg (inl src_reg) off)
+    else
+      None
+  | _ => None
+  end.
+
+Definition decode_lddw_insn (dst_reg src_reg : ireg) (imm next_imm : int) : option instruction :=
+  match src_reg with
+  | R0 => Some (Plddw dst_reg imm next_imm)
+  (* TODO : R1~R6 *)
+  | _ => None
+  end.
+
+Definition Z_to_ireg (i : Z) : option ireg :=
+  match i with
+  | 0 => Some R0 | 1 => Some R1 | 2 => Some R2
+  | 3 => Some R3 | 4 => Some R4 | 5 => Some R5
+  | 6 => Some R6 | 7 => Some R7 | 8 => Some R8
+  | 9 => Some R9 | 10 => Some R10 | _ => None
+  end.
+
+Definition find_instr (pc : Z) (bpf_prog : code) : option instruction :=
+  match (nth_error bpf_prog (Z.to_nat pc)) with
+  | None => None
+  | Some data =>
+    let opcode := Byte.repr (Int64.unsigned (get_sub_insn data 0 8)) in
+    let dst_reg := Z_to_ireg (Int64.unsigned (get_sub_insn data 8 4)) in
+    let src_reg := Z_to_ireg (Int64.unsigned (get_sub_insn data 12 4)) in
+    let off := Ptrofs.repr (Int64.signed (get_sub_insn data 16 16)) in
+    let imm := Int.repr (Int64.signed (get_sub_insn data 32 32)) in
+    match dst_reg, src_reg with
+    | Some dst_reg, Some src_reg =>
+      if Z.eqb (Byte.unsigned opcode) 0x18 then
+        (* LDDW insn *)
+        match (nth_error bpf_prog (Z.to_nat (pc + 1))) with
+        | None => None
+        | Some data2 =>
+          let reserved := Int64.signed (get_sub_insn data2 0 32) in
+          let next_imm := Int.repr (Int64.signed (get_sub_insn data2 32 32)) in
+            if (Z.eqb reserved 0) then
+              decode_lddw_insn dst_reg src_reg imm next_imm
+            else
+              None
+        end
+      else
+        (* common insn *)
+        decode_insn opcode dst_reg src_reg off imm
+    | _, _ => None
+    end
+  end.
+
 Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: list int64) (st: outcome) (l_ptr: list int64)  (addr_map: list addr_region): outcome :=
   match fuel with
   | O => Stuck (* assume we have enough fuel *)
