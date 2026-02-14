@@ -209,11 +209,11 @@ Inductive instruction : Type :=
 
   | Patomic: forall (aty: atomic_type) (dst:ireg) (src:ireg+imm) (offset:off), instruction  (**r atomic instructions *)
 
-  | Palu : forall (o:aluOp) (w:width) (r:ireg) (a:ireg+imm), instruction                  (**r arithmetics *)
+  | Palu : forall (op:aluOp) (w:width) (r:ireg) (a:ireg+imm), instruction                  (**r arithmetics *)
 
   | Pjmp32 : forall (immediate:imm), instruction                                          (**r 32-bit unconditional jump *)
   | Pjmp64 : forall (offset:off), instruction                                             (**r 64-bit unconditional jump *)
-  | Pjmpcmp : forall (o:cmpOp) (w:width) (r:ireg) (a:ireg+imm) (offset:off), instruction  (**r conditional jump with comparison *)
+  | Pjmpcmp : forall (op:cmpOp) (w:width) (r:ireg) (a:ireg+imm) (offset:off), instruction  (**r conditional jump with comparison *)
   | Pcall : forall (cty: call_type) (immediate: imm), instruction                         (**r function call *)
   | Pret : instruction                                                                    (**r function return *)
 .
@@ -595,10 +595,10 @@ Definition eval_end (e:endOp) (s: endSize) (v: val) : val :=
   end.
 
 (** Evaluation of [Palu] operands *)
-Definition eval_alu32 (b: aluOp) (v1: val) (v2: val+int) : val :=
+Definition eval_alu32 (op: aluOp) (v1: val) (v2: val+int) : val :=
   let dst := Val.loword v1 in
   let src := match v2 with | inl r => Val.loword r | inr i => Vint i end in
-    match b with
+    match op with
     | ADD   => Val.longofintu (Val.add dst src)
     | SUB   => Val.longofintu (Val.sub dst src)
     | MUL   => Val.longofintu (Val.mul dst src)
@@ -618,9 +618,9 @@ Definition eval_alu32 (b: aluOp) (v1: val) (v2: val+int) : val :=
     | END e s => eval_end e s dst
     end.
 
-Definition eval_alu64 (b: aluOp) (dst: val) (v2: val+int) : val :=
+Definition eval_alu64 (op: aluOp) (dst: val) (v2: val+int) : val :=
   let src := eval_val_int W64 v2 in
-  match b with
+  match op with
   | ADD   => Val.addl dst src
   | SUB   => Val.subl dst src
   | MUL   => Val.mull dst src
@@ -640,9 +640,9 @@ Definition eval_alu64 (b: aluOp) (dst: val) (v2: val+int) : val :=
   | END e s => eval_end e s dst
   end.
 
-Definition exec_alu (o: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (c_stk: cstk) (m: mem) :=
+Definition exec_alu (op: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (c_stk: cstk) (m: mem) :=
   let alu_f := match w with | W32 => eval_alu32 | W64 => eval_alu64 end in
-  let v := alu_f o (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) in
+  let v := alu_f op (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) in
     Next (nextinstr (rs#r <- v)) c_stk m.
 
 (** RFC9669: 4.3. Jump Instructions
@@ -705,7 +705,7 @@ Definition exec_jmp32 (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
 Definition exec_jmp64 (o: off) (rs: regset) (c_stk: cstk) (m: mem) :=
   Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) c_stk m.
 
-Definition exec_jmpcmp (w: width) (op: cmpOp) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (c_stk: cstk) (m: mem) :=
+Definition exec_jmpcmp (op: cmpOp) (w: width) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (c_stk: cstk) (m: mem) :=
   match
     match w with
     | W32 => eval_cmp32 op rs m r ri
@@ -1002,10 +1002,10 @@ Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem)  (l_pt
   | Plddw r lo hi         => exec_lddw r lo hi rs c_stk m l_ptr addr_map
   | Pload k r r' o        => exec_load k r r' o rs c_stk m
   | Pstore k r ri o       => exec_store k r ri o rs c_stk m
-  | Palu o w r ri         => exec_alu o w r ri rs c_stk m
-  | Pjmp32 o              => exec_jmp32 o rs c_stk m
-  | Pjmp64 i              => exec_jmp64 i rs c_stk m
-  | Pjmpcmp op w r ri o   => exec_jmpcmp w op r ri o rs c_stk m
+  | Palu op w r ri        => exec_alu op w r ri rs c_stk m
+  | Pjmp32 i              => exec_jmp32 i rs c_stk m
+  | Pjmp64 o              => exec_jmp64 o rs c_stk m
+  | Pjmpcmp op w r ri o   => exec_jmpcmp op w r ri o rs c_stk m
   | Pcall CallInternal i  => exec_call_internal i rs c_stk m
   | Pret                  => exec_ret rs c_stk m
   | _                     => Stuck
