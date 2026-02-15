@@ -203,8 +203,27 @@ Inductive atomic_type : Type :=
   | STORE_RELEASE (sz:sizeOp)
   .
 
+(***
+src_reg Pseudocode imm Type dst Type
+0x0 dst = (next_imm << 32) | imm integer integer
+0x1 dst = map_by_fd(imm) map fd map
+0x2 dst = map_val(map_by_fd(imm)) + next_imm map fd data address
+0x3 dst = var_addr(imm) variable id data address
+0x4 dst = code_addr(imm) integer code address
+0x5 dst = map_by_idx(imm) map index map
+0x6 dst = map_val(map_by_idx(imm)) + next_imm map index data address
+*)
+Inductive pseudo_ptr_ty :=
+  | PSEUDO_Constant
+  | PSEUDO_MAP_IDX
+  | PSEUDO_MAP_VALUE
+  | PSEUDO_MAP_IDX_VALUE
+  | PSEUDO_BTF_ID
+  | PSEUDO_FUNC
+.
+
 Inductive instruction : Type :=
-  | Plddw  : forall (dst:ireg) (lo:imm) (hi:imm), instruction                             (**r dst = lo | (hi <<32) *)
+  | Plddw  : forall (ty: pseudo_ptr_ty) (dst:ireg) (lo:imm) (hi:imm), instruction                             (**r dst = lo | (hi <<32) *)
 
   | Pload : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = * (size) (src + offset) *)
   | Pstore : forall (sz:sizeOp) (dst:ireg) (src:ireg+imm) (offset:off), instruction       (**r * (size) (dst + offset) = src *)
@@ -785,7 +804,8 @@ Fixpoint find_abstract_address (v: int64) (addr_map: list addr_region): option v
         find_abstract_address v t
   end.
 
-Fixpoint cast_i2p_aux (v: int64) (b: block) (ofs: ptrofs) (l_ptr: list int64) (addr_map: list addr_region) : option val :=
+(** TODO: pseudo_ptr_ty should be used following the implementation of resolve_pseudo_ldimm64 in verifier.c  *)
+Fixpoint cast_i2p_aux (ty: pseudo_ptr_ty) (v: int64) (b: block) (ofs: ptrofs) (l_ptr: list int64) (addr_map: list addr_region) : option val :=
   match l_ptr with
   | [] => Some (Vlong v)
   | h :: tl =>
@@ -793,23 +813,26 @@ Fixpoint cast_i2p_aux (v: int64) (b: block) (ofs: ptrofs) (l_ptr: list int64) (a
       (** for eBPF program, instruction [i.e. LDDW (+ external call for the validation purpose)] at pc: the result should be computed as a pointer *)
       find_abstract_address v addr_map
     else
-      cast_i2p_aux v b ofs tl addr_map
+      cast_i2p_aux ty v b ofs tl addr_map
   end.
 
-Definition cast_i2p (v: int64) (pc: val) (l_ptr: list int64) (addr_map: list addr_region): bool * (option val) :=
+Definition cast_i2p (ty: pseudo_ptr_ty) (v: int64) (pc: val) (l_ptr: list int64) (addr_map: list addr_region): option val :=
   match pc with
-  | Vptr b ofs => (true, cast_i2p_aux v b ofs l_ptr addr_map)
-  | _ => (false, None)
+  | Vptr b ofs => cast_i2p_aux ty v b ofs l_ptr addr_map
+  | _ => None
   end.
 
-Definition exec_lddw (r:ireg) (lo hi: imm) (rs: regset) (c_stk: cstk) (m: mem) (l_ptr: list int64)  (addr_map: list addr_region) :=
+Definition exec_lddw (ty: pseudo_ptr_ty) (r:ireg) (lo hi: imm) (rs: regset) (c_stk: cstk) (m: mem) (l_ptr: list int64)  (addr_map: list addr_region) :=
   let v := Int64.ofwords hi lo in
-    match cast_i2p v (rs PC) l_ptr addr_map with
-    | (false, _) => Stuck (** something is wrong *)
-    | (true, None) => (** it is a int64 *)
+    match ty with
+    | PSEUDO_Constant =>
       Next (nextinstr (nextinstr (rs#r <- (Vlong v)))) c_stk m
-    | (true, Some vp) => (** it is a vptr b ofs *)
-      Next (nextinstr (nextinstr (rs#r <- vp))) c_stk m
+    | _ =>
+      match cast_i2p ty v (rs PC) l_ptr addr_map with
+      | None => Stuck (** something is wrong *)
+      | Some vp => (** it is a vptr b ofs *)
+        Next (nextinstr (nextinstr (rs#r <- vp))) c_stk m
+      end
     end.
 
 (** Undefine all ebpf caller-saved registers: i.e. R1 to R5 *)
@@ -1001,7 +1024,7 @@ Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
 
 Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem)  (l_ptr: list int64) (addr_map: list addr_region) : outcome :=
   match i with
-  | Plddw r lo hi         => exec_lddw r lo hi rs c_stk m l_ptr addr_map
+  | Plddw ty r lo hi         => exec_lddw ty r lo hi rs c_stk m l_ptr addr_map
   | Pload k r r' o        => exec_load k r r' o rs c_stk m
   | Pstore k r ri o       => exec_store k r ri o rs c_stk m
   | Palu op w r ri        => exec_alu op w r ri rs c_stk m
