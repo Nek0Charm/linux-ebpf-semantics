@@ -177,7 +177,7 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
 
 Definition decode_lddw_insn (dst_reg src_reg : ireg) (imm next_imm : int) : option instruction :=
   match src_reg with
-  | R0 => Some (Plddw dst_reg imm next_imm)
+  | R0 => Some (Plddw PSEUDO_Constant dst_reg imm next_imm)
   (* TODO : R1~R6 *)
   | _ => None
   end.
@@ -370,9 +370,9 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (l_ptr: list int64)  (addr_map:
               | [] => false
               | h :: t => 
                 if compare_trace_at_pc rs h addr_map then
-                  false
-                else
                   bpf_interpreter_trace_check k l_ptr addr_map init_sp bpf_prog t (exec_instr ins rs stk m l_ptr addr_map)
+                else
+                  false
               end
           end
         end
@@ -409,7 +409,7 @@ Definition semantics_validation_aux (bpf_prog: list int64) (trace: list (list in
     |};
     {| 
       base_blk := ctx_blk;
-      size_blk := 30;  (** TODO we assume size_blk is 30 here *) 
+      size_blk := ctx_size;
       base_addr := ctx_base
     |};
     {| 
