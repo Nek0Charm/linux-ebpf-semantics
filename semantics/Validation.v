@@ -293,9 +293,9 @@ Definition is_abstract_value_concrete_eq (av: val) (cv: int64) (addr_map: list a
 Definition compare_final_state (rs: regset) (trace: list (list int64)) (addr_map: list addr_region): bool :=
   match trace with
   | [h] =>
-    match List.nth_error h 1%nat with
+    match List.nth_error h 0%nat with
     | None => false
-    | Some v => is_abstract_value_concrete_eq (rs R1) v addr_map
+    | Some v => is_abstract_value_concrete_eq (rs R0) v addr_map
     end
   | _ => false
   end.
