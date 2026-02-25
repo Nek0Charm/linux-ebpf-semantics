@@ -126,7 +126,7 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
         end
       else None
        
-    else if Z.eqb code 0x9 && is_jmp64 && src_is_reg then (* EXIT *)
+    else if Z.eqb code 0x9 && is_jmp64 && src_is_imm then (* EXIT *)
       if check_src_r0 && check_imm_0 && check_off_0 then Some Pret else None
 
     else (* Conditional Jumps *)
@@ -197,8 +197,8 @@ Definition find_instr (pc : Z) (bpf_prog : code) : option instruction :=
     let opcode := Byte.repr (Int64.unsigned (get_sub_insn data 0 8)) in
     let dst_reg := Z_to_ireg (Int64.unsigned (get_sub_insn data 8 4)) in
     let src_reg := Z_to_ireg (Int64.unsigned (get_sub_insn data 12 4)) in
-    let off := Ptrofs.repr (Int64.signed (get_sub_insn data 16 16)) in
-    let imm := Int.repr (Int64.signed (get_sub_insn data 32 32)) in
+    let off := Ptrofs.repr (Int64.signed (Int64.sign_ext 16 (get_sub_insn data 16 16))) in
+    let imm := Int.repr (Int64.signed (Int64.sign_ext 32 (get_sub_insn data 32 32))) in
     match dst_reg, src_reg with
     | Some dst_reg, Some src_reg =>
       if Z.eqb (Byte.unsigned opcode) 0x18 then
