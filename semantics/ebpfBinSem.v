@@ -21,7 +21,8 @@ Import ListNotations.
 
 (** RFC9559: TODO *)
 Inductive ireg: Type := R0 | R1 | R2 | R3 | R4 | R5 | R6 | R7 | R8 | R9 
-  | R10 (**r eBPF stack frame pointer *).
+  | R10 (**r eBPF stack frame pointer *)
+  | RAX (**r hidden auxiliary/helper register *).
 
 Lemma ireg_eq: forall (x y: ireg), {x=y} + {x<>y}.
 Proof. decide equality. Defined.

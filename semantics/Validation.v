@@ -121,7 +121,9 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
     else if Z.eqb code 0x8 && is_jmp64 && src_is_imm then (* CALL *)
       if check_off_0 then
         match src_reg with
+        | R0 => Some (Pcall CallByStaticID imm)
         | R1 => Some (Pcall CallInternal imm)
+        | R2 => Some (Pcall CallByBTF imm)
         | _ => None
         end
       else None
@@ -187,7 +189,8 @@ Definition Z_to_ireg (i : Z) : option ireg :=
   | 0 => Some R0 | 1 => Some R1 | 2 => Some R2
   | 3 => Some R3 | 4 => Some R4 | 5 => Some R5
   | 6 => Some R6 | 7 => Some R7 | 8 => Some R8
-  | 9 => Some R9 | 10 => Some R10 | _ => None
+  | 9 => Some R9 | 10 => Some R10 | 11 => Some RAX
+  | _ => None
   end.
 
 Definition find_instr (pc : Z) (bpf_prog : code) : option instruction :=
@@ -313,6 +316,7 @@ Definition nat_of_ireg (r: ireg): nat :=
   | R8 => 8
   | R9 => 9
   | R10 => 10
+  | RAX => 11
   end.
 
 Definition compare_trace_at_pc_aux (r: ireg) (rs: regset) (trace: list int64) (addr_map: list addr_region): bool :=
@@ -354,12 +358,17 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (l_ptr: list int64)  (addr_map:
             match trace with
             | [] => false
             | h :: t =>
-              match List.nth_error h 0%nat with
-              | None => false
-              | Some r0 =>
-              (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
-                bpf_interpreter_trace_check k l_ptr addr_map init_sp bpf_prog trace
-                  (Next (nextinstr (rs#R0 <- (Vlong r0))) stk m)
+              match t with
+              | [] => false
+              | next_h :: next_t =>
+                (* Here we get R0 from next state *)
+                match List.nth_error next_h 0%nat with
+                | None => false
+                | Some r0 =>
+                (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
+                  bpf_interpreter_trace_check k l_ptr addr_map init_sp bpf_prog t
+                    (Next (nextinstr (rs#R0 <- (Vlong r0))) stk m)
+                end
               end
             end
           | _ =>
@@ -382,9 +391,11 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (l_ptr: list int64)  (addr_map:
   end.
 
 Definition create_initial_state (ctx stk pc: block): regset :=
-  (Pregmap.init Vundef)
+  (Pregmap.init (Vlong Int64.zero))
+  (* (Pregmap.init Vundef) *)
     # PC <- (Vptr pc Ptrofs.zero)
-    # R10 <- (Vptr stk Ptrofs.zero)
+    # R10 <- (Vptr stk (Ptrofs.repr bpf_stack_size))
+    (* # R10 <- (Vptr stk Ptrofs.zero) *)
     # R1 <- (Vptr ctx Ptrofs.zero)
     (* # BP  <- Vnullptr *)
 .
@@ -415,7 +426,7 @@ Definition semantics_validation_aux (bpf_prog: list int64) (trace: list (list in
     {| 
       base_blk := stk_blk;
       size_blk := bpf_stack_size;
-      base_addr := r10_base
+      base_addr := Int64.sub r10_base (Int64.repr bpf_stack_size)
     |} ] in
 
   (** initial_regs *)
