@@ -722,7 +722,7 @@ Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+imm)
     end.
 
 Definition exec_jmp32 (i: imm) (rs: regset) (c_stk: cstk) (m: mem) :=
-  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i)))) c_stk m.
+  Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_ints i)))) c_stk m.
 
 Definition exec_jmp64 (o: off) (rs: regset) (c_stk: cstk) (m: mem) :=
   Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) c_stk m.
