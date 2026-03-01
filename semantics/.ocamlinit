@@ -1,0 +1,68 @@
+let rec int64_of_positive = function
+  | Validation.XH -> 1L
+  | Validation.XO p -> Stdlib.Int64.shift_left (int64_of_positive p) 1
+  | Validation.XI p -> Stdlib.Int64.logor (Stdlib.Int64.shift_left (int64_of_positive p) 1) 1L
+;;
+
+let int64_of_coq_Z = function
+  | Validation.Z0 -> 0L
+  | Validation.Zpos p -> int64_of_positive p
+  | Validation.Zneg p -> Stdlib.Int64.neg (int64_of_positive p)
+;;
+
+(* Custom Printers *)
+let format_val0 fmt v =
+  let s = match v with
+    | Validation.Vundef -> "Vundef"
+    | Validation.Vint i -> Printf.sprintf "i32(%Ld)" (int64_of_coq_Z i)
+    | Validation.Vlong l -> Printf.sprintf "i64(%Ld)" (int64_of_coq_Z l)
+    | Validation.Vptr (b, ofs) ->
+        let b_idx = int64_of_positive b in
+        let offset = int64_of_coq_Z ofs in 
+        let region = match b_idx with
+          | 1L -> "PC"
+          | 2L -> "CTX(R1)"
+          | 3L -> "STACK(R10)"
+          | _ -> Printf.sprintf "BLK_%Ld" b_idx
+        in
+        if offset < 0L then
+          Printf.sprintf "[%s - %Ld]" region (Stdlib.Int64.neg offset)
+        else if offset > 0L then
+          Printf.sprintf "[%s + %Ld]" region offset
+        else
+          Printf.sprintf "[%s]" region
+    | _ -> "Unknown"
+  in
+  Format.fprintf fmt "%s" s
+;;
+
+let format_chunk fmt c =
+  let s = match c with
+    | Validation.Mint8unsigned -> "u8"
+    | Validation.Mint16unsigned -> "u16"
+    | Validation.Mint32 -> "u32"
+    | Validation.Mint64 -> "u64"
+    | _ -> "other_chunk"
+  in Format.fprintf fmt "%s" s
+;;
+
+let format_mem fmt (m: Validation.Mem.mem) =
+  Format.fprintf fmt "%s" "<MemState>"
+;;
+
+let format_positive fmt (p: Validation.positive) =
+  Format.fprintf fmt "%Ld" (int64_of_positive p)
+;;
+
+let format_z fmt (z_val: Validation.z) =
+  Format.fprintf fmt "%Ld" (int64_of_coq_Z z_val)
+;;
+
+#install_printer format_val0;;
+#install_printer format_chunk;;
+#install_printer format_mem;;
+#install_printer format_positive;;
+#install_printer format_z;;
+
+#use "main.ml";;
+#trace Validation.compare_trace_at_pc;;

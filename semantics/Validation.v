@@ -7,6 +7,13 @@ From bpf.ebpf Require Import ebpfBinSem.
 
 Import ListNotations.
 
+Definition debug_fail_common (id : Z) : bool := false.
+Definition debug_fail_step (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
+Definition debug_fail_stuck (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
+Definition debug_fail_final (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
+Definition debug_fail_decode (pc: Ptrofs.int) (raw_insn: int64) : bool := false.
+Definition debug_fail_decode_oob (pc: Ptrofs.int) : bool := false.
+
 Definition get_sub_insn (ins: int64) (from size: nat): int64 :=
   Int64.unsigned_bitfield_extract (Z.of_nat from) (Z.of_nat size) ins.
 
@@ -349,7 +356,12 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (l_ptr: list int64)  (addr_map:
       match rs PC with
       | Vptr b ofs =>
         match find_instr (Ptrofs.unsigned ofs) bpf_prog with
-        | None => false
+        | None =>
+            let idx := Z.to_nat (Ptrofs.unsigned ofs) in 
+            match nth_error bpf_prog idx with
+            | Some raw_insn => debug_fail_decode ofs raw_insn
+            | None => debug_fail_decode_oob ofs
+            end
         | Some ins =>
           match ins with
           | Pcall CallByStaticID i
@@ -373,15 +385,22 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (l_ptr: list int64)  (addr_map:
             end
           | _ =>
             if is_final_state ins rs addr_map init_sp then
-              compare_final_state rs trace addr_map
+              if compare_final_state rs trace addr_map then true
+                else debug_fail_final ofs (rs R0) (rs R1) (rs R2) (rs R10)
             else
               match trace with
-              | [] => false
+              | [] => debug_fail_common 13
               | h :: t => 
                 if compare_trace_at_pc rs h addr_map then
-                  bpf_interpreter_trace_check k l_ptr addr_map init_sp bpf_prog t (exec_instr ins rs stk m l_ptr addr_map)
+                  let next_st := exec_instr ins rs stk m l_ptr addr_map in
+                  match next_st with
+                  | Stuck => 
+                    debug_fail_stuck ofs (rs R0) (rs R1) (rs R2) (rs R10)
+                  | _ => 
+                    bpf_interpreter_trace_check k l_ptr addr_map init_sp bpf_prog t next_st
+                  end
                 else
-                  false
+                  debug_fail_step ofs (rs R0) (rs R1) (rs R2) (rs R10)
               end
           end
         end
