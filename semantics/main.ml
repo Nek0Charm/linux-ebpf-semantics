@@ -147,18 +147,39 @@ let () =
 (* ========================================== *)
 (* Main Testing Program *)
 (* ========================================== *)
-let run_test filename =
-  Printf.printf "Loading JSON traces from %s...\n" filename;
-  let programs = load_traces_from_json filename in
-  Printf.printf "[Info] Successfully loaded %d programs.\n\n" (List.length programs);
-  
-  List.iteri (fun i (prog_name, prog_mock, trace_mock) ->
-    Printf.printf "=================================================\n";
-    Printf.printf "Validating Program [%d]: %s\n" (i + 1) prog_name;
-    Printf.printf "  - Instructions : %d\n" (List.length prog_mock);
-    Printf.printf "  - Trace steps  : %d\n" (List.length trace_mock);
+let read_lines filename =
+  let lines = ref [] in
+  let chan = open_in filename in
+  try
+    while true do
+      let line = String.trim (input_line chan) in
+      if String.length line > 0 then
+        lines := line :: !lines
+    done;
+    []
+  with End_of_file ->
+    close_in chan;
+    List.rev !lines
 
-    (* Constuct initial state *)
+let run_test filename verbose =
+  if verbose then Printf.printf "Loading JSON traces from %s...\n" filename;
+  
+  let programs = load_traces_from_json filename in
+  let total_progs = List.length programs in
+  
+  if verbose then Printf.printf "[Info] Successfully loaded %d programs.\n\n" total_progs;
+  
+  let passed_count = ref 0 in
+
+  List.iteri (fun i (prog_name, prog_mock, trace_mock) ->
+    if verbose then begin
+      Printf.printf "=================================================\n";
+      Printf.printf "Validating Program [%d]: %s\n" (i + 1) prog_name;
+      Printf.printf "  - Instructions : %d\n" (List.length prog_mock);
+      Printf.printf "  - Trace steps  : %d\n" (List.length trace_mock)
+    end;
+
+    (* Constuct initial state and align the timeline *)
     let aligned_trace_mock =
       match trace_mock with
       | [] -> []
@@ -177,19 +198,35 @@ let run_test filename =
                     (cast_list []) 
     in
     
-    if result then
-      Printf.printf "  [+] Result: PASSED (Execution matches formal semantics)\n"
-    else
-      Printf.printf "  [-] Result: FAILED (Trace mismatch or execution stuck)\n"
+    if result then begin
+      incr passed_count;
+      if verbose then Printf.printf "  [+] Result: PASSED (Execution matches formal semantics)\n"
+    end else begin
+      if verbose then Printf.printf "  [-] Result: FAILED (Trace mismatch or execution stuck)\n"
+    end
   ) programs;
   
-  Printf.printf "=================================================\n";
-  Printf.printf "All validations finished.\n"
+  if verbose then begin
+    Printf.printf "=================================================\n";
+    Printf.printf "All validations finished. Passed: %d / %d\n" !passed_count total_progs
+  end else begin
+    Printf.printf "[%s] Passed: %d / %d\n" filename !passed_count total_progs;
+    flush stdout
+  end
 
 let () =
   if not !Sys.interactive then begin
     if Array.length Sys.argv < 2 then
-      Printf.printf "Usage: %s <trace.json>\n" Sys.argv.(0)
+      Printf.printf "Usage: %s <trace_filename | all>\n" Sys.argv.(0)
     else
-      run_test Sys.argv.(1)
+      let arg = Sys.argv.(1) in
+      if arg = "all" then begin
+        let summary_file = "../trace/summary_with_trace.txt" in
+        Printf.printf "Starting batch validation from %s...\n\n" summary_file;
+        let filenames = read_lines summary_file in
+        List.iter (fun f -> run_test f false) filenames;
+        Printf.printf "\nBatch validation finished.\n"
+      end else begin
+        run_test arg true
+      end
   end
