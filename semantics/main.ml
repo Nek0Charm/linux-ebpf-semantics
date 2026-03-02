@@ -6,17 +6,17 @@ open Yojson.Safe.Util
 (* ========================================== *)
 (* Coq to OCaml Types *)
 (* ========================================== *)
-let rec positive_of_int64 n =
-  if n <= 1L then XH
+let rec positive_of_uint64 n =
+  if n = 0L then failwith "unreachable"
+  else if n = 1L then XH
   else if Stdlib.Int64.logand n 1L = 0L then 
-    XO (positive_of_int64 (Stdlib.Int64.shift_right_logical n 1))
+    XO (positive_of_uint64 (Stdlib.Int64.shift_right_logical n 1))
   else 
-    XI (positive_of_int64 (Stdlib.Int64.shift_right_logical n 1))
+    XI (positive_of_uint64 (Stdlib.Int64.shift_right_logical n 1))
 
 let coq_Z_of_int64 n =
   if n = 0L then Z0
-  else if n > 0L then Zpos (positive_of_int64 n)
-  else Zneg (positive_of_int64 (Stdlib.Int64.neg n))
+  else Zpos (positive_of_uint64 n)
 
 let compcert_int64_of_native (i: int64) =
   Int64.repr (coq_Z_of_int64 i)
