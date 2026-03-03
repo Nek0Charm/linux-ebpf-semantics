@@ -376,7 +376,7 @@ Definition goto_label (f: function) (lbl: label) (rs: regset) (c_stk: cstk) (m: 
 *)
 
 Definition int64_of_int (i:int) := Int64.repr (Int.signed i).
-
+Definition int_of_int64 (i:int64) := Int.repr (Int64.signed i).
 
 Definition map_sum_left {A B A': Type} (F: A -> A')  (x: A+B) : A'+B :=
   match x with
@@ -529,7 +529,10 @@ Definition eval_mod_s64 (v1 v2:val) : val :=
 Definition eval_shift_mask (w:width) (v1:val) : val :=
   match w with
   | W32 => Val.and v1 (Vint (Int.repr 31%Z))
-  | W64 => Val.andl v1 (Vlong (Int64.repr 63%Z))
+  | W64 => match v1 with
+           | Vlong vl => Val.and (Vint (int_of_int64 vl)) (Vint (Int.repr 63%Z))
+           | _ => Vundef
+           end
   end.
 
 (** RFC9669: 4.1. Arithmetic Instructions 
