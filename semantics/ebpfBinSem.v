@@ -226,6 +226,8 @@ Inductive pseudo_ptr_ty :=
 Inductive instruction : Type :=
   | Plddw  : forall (ty: pseudo_ptr_ty) (dst:ireg) (lo:imm) (hi:imm), instruction                             (**r dst = lo | (hi <<32) *)
 
+  | Ploadsx : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = if valid_ptr then * (size) (src + offset) *)
+
   | Pload : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = * (size) (src + offset) *)
   | Pstore : forall (sz:sizeOp) (dst:ireg) (src:ireg+imm) (offset:off), instruction       (**r * (size) (dst + offset) = src *)
 
@@ -775,6 +777,27 @@ Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) 
   | Some v => Next (nextinstr (rs#r <- (load_value_casting v))) c_stk m
   end.
 
+Definition loadsx (k: sizeOp) (addr:val) (m: mem) :=
+  match k with
+  | Byte      => Mem.loadv Mint8signed m addr
+  | HalfWord  => Mem.loadv Mint16signed m addr
+  | Word      => Mem.loadv Many32 m addr
+  | DBWord    => None
+  (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
+  end.
+
+Definition load_value_sx_casting (v: val): val :=
+  match v with
+  | Vint i => Vlong (Int64.repr (Int.signed i))
+  | _ => v
+  end.
+
+Definition exec_loadsx (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
+    match loadsx k (Val.offset_ptr rs#r' o) m with
+    | None => Stuck
+    | Some v => Next (nextinstr (rs#r <- (load_value_sx_casting v))) c_stk m
+    end.
+
 Definition store (k: sizeOp) (addr:val) (v:val) (m: mem) :=
   match k with
   | Byte      => Mem.storev Mint8unsigned m addr v
@@ -1029,6 +1052,7 @@ Definition exec_ret (rs: regset) (c_stk: cstk) (m: mem) :=
 Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem)  (l_ptr: list int64) (addr_map: list addr_region) : outcome :=
   match i with
   | Plddw ty r lo hi         => exec_lddw ty r lo hi rs c_stk m l_ptr addr_map
+  | Ploadsx k r r' o         => exec_loadsx k r r' o rs c_stk m
   | Pload k r r' o        => exec_load k r r' o rs c_stk m
   | Pstore k r ri o       => exec_store k r ri o rs c_stk m
   | Palu op w r ri        => exec_alu op w r ri rs c_stk m

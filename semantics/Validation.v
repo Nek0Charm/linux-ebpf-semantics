@@ -159,7 +159,7 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
         end
       else None
 
-  (* ==================== MEMORY (LDX, ST, STX) ==================== *)
+  (* ==================== MEMORY (LDX, LDSX, ST, STX) ==================== *)
   else if is_ldx || is_st || is_stx then
     if Z.eqb (Z.shiftr op_val 5) 0x3 then (* Mode = MEM (0x60) *)
       let sz := Z.land (Z.shiftr op_val 3) 0x3 in (* Size bits 3-4 *)
@@ -180,6 +180,22 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
           if check_imm_0 then Some (Pstore sz dst_reg (inl src_reg) off) else None
       | None => None
       end
+    else if Z.eqb (Z.shiftr op_val 5) 0x4 then (* Mode = MEM (0x40) *)
+      let sz := Z.land (Z.shiftr op_val 3) 0x3 in (* Size bits 3-4 *)
+      let mem_sz := match sz with
+                    | 0x0 => Some Word
+                    | 0x1 => Some HalfWord
+                    | 0x2 => Some Byte
+                    | _ => None
+                    end in
+      match mem_sz with
+      | Some sz =>
+        if is_ldx then
+          if check_imm_0 then Some (Ploadsx sz dst_reg src_reg off) else None
+        else None
+      | None => None
+      end
+
     else None
   else
     None.
