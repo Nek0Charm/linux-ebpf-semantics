@@ -3,7 +3,9 @@
 ## Build & Run
 
 ```shell
+make
 cd ebpf
+dune build
 ```
 
 See overall result:
