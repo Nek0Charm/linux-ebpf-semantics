@@ -226,10 +226,12 @@ Inductive pseudo_ptr_ty :=
 Inductive instruction : Type :=
   | Plddw  : forall (ty: pseudo_ptr_ty) (dst:ireg) (lo:imm) (hi:imm), instruction                             (**r dst = lo | (hi <<32) *)
 
-  | Ploadsx : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = if valid_ptr then * (size) (src + offset) *)
+  | Ploadsx : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = * (signed size) (src + offset) *)
+  | Pload_probe : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = if valid_ptr then * (unsigned size) (src + offset) *)
+  | Ploadsx_probe : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = if valid_ptr then * (unsigned size) (src + offset) *)
 
-  | Pload : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = * (size) (src + offset) *)
-  | Pstore : forall (sz:sizeOp) (dst:ireg) (src:ireg+imm) (offset:off), instruction       (**r * (size) (dst + offset) = src *)
+  | Pload : forall (sz:sizeOp) (dst:ireg) (src:ireg) (offset:off), instruction            (**r dst = * (unsigned size) (src + offset) *)
+  | Pstore : forall (sz:sizeOp) (dst:ireg) (src:ireg+imm) (offset:off), instruction       (**r * (unsigned size) (dst + offset) = src *)
 
   | Patomic: forall (aty: atomic_type) (dst:ireg) (src:ireg+imm) (offset:off), instruction  (**r atomic instructions *)
 
@@ -777,6 +779,12 @@ Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) 
   | Some v => Next (nextinstr (rs#r <- (load_value_casting v))) c_stk m
   end.
 
+Definition exec_load_probe (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
+  match load k (Val.offset_ptr rs#r' o) m with
+  | None =>   Next (nextinstr (rs#r <- (Vlong Int64.zero))) c_stk m
+  | Some v => Next (nextinstr (rs#r <- (load_value_casting v))) c_stk m
+  end.
+
 Definition loadsx (k: sizeOp) (addr:val) (m: mem) :=
   match k with
   | Byte      => Mem.loadv Mint8signed m addr
@@ -794,6 +802,21 @@ Definition load_value_sx_casting (v: val): val :=
 
 Definition exec_loadsx (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
     match loadsx k (Val.offset_ptr rs#r' o) m with
+    | None => Stuck
+    | Some v => Next (nextinstr (rs#r <- (load_value_sx_casting v))) c_stk m
+    end.
+
+Definition loadsx_probe (k: sizeOp) (addr:val) (m: mem) :=
+  match k with
+  | Byte      => match Mem.loadv Mint8signed m addr with | None => Some Vzero | Some v => Some v end
+  | HalfWord  => match Mem.loadv Mint16signed m addr with | None => Some Vzero | Some v => Some v end
+  | Word      => match Mem.loadv Many32 m addr with | None => Some Vzero | Some v => Some v end
+  | DBWord    => None
+  (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
+  end.
+
+Definition exec_loadsx_probe (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (m: mem) :=
+    match loadsx_probe k (Val.offset_ptr rs#r' o) m with
     | None => Stuck
     | Some v => Next (nextinstr (rs#r <- (load_value_sx_casting v))) c_stk m
     end.
@@ -1053,6 +1076,8 @@ Definition exec_instr (i: instruction) (rs:regset) (c_stk: cstk) (m: mem)  (l_pt
   match i with
   | Plddw ty r lo hi         => exec_lddw ty r lo hi rs c_stk m l_ptr addr_map
   | Ploadsx k r r' o         => exec_loadsx k r r' o rs c_stk m
+  | Pload_probe k r r' o     => exec_load_probe k r r' o rs c_stk m
+  | Ploadsx_probe k r r' o   => exec_loadsx_probe k r r' o rs c_stk m
   | Pload k r r' o        => exec_load k r r' o rs c_stk m
   | Pstore k r ri o       => exec_store k r ri o rs c_stk m
   | Palu op w r ri        => exec_alu op w r ri rs c_stk m
