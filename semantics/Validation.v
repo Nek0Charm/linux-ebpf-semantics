@@ -52,6 +52,7 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
   let src_is_imm  := Z.eqb src BPF_SRC.K in
 
   let check_src_r0 := ireg_eqb src_reg R0 in
+  let check_dst_r0 := ireg_eqb dst_reg R0 in
   let check_imm_0  := Z.eqb (Int.signed imm) 0 in
   let check_off_0  := Z.eqb (Ptrofs.signed off) 0 in
 
@@ -124,7 +125,8 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
         if check_src_r0 && check_imm_0 then Some (Pjmp64 off) else None
       else
         if check_src_r0 && check_off_0 then Some (Pjmp32 imm) else None
-
+    else if Z.eqb code 0xf && is_jmp64 then (* JMP_TAIL_CALL *)
+      if check_dst_r0 && check_src_r0 && check_off_0 && check_imm_0 then Some Ptail_call else None
     else if Z.eqb code 0x8 && is_jmp64 && src_is_imm then (* CALL *)
       if check_off_0 then
         match src_reg with
@@ -161,10 +163,9 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
 
   (* ==================== MEMORY (LDX, LDX_PROBE, LDSX, LDSX_PROBE, ST_NOSPEC, ST, STX) ==================== *)
   else if is_ldx || is_st || is_stx then
-    if Z.eqb (Z.shiftr op_val 5) 0x3 then (* Mode = MEM (0x60) *)
-      if Z.eqb op_val 0xc2 then 
-        if check_imm_0 && check_off_0 && check_src_r0 && ireg_eqb dst_reg R0 then Some Pno_spec else None
-      else
+    if Z.eqb op_val 0xc2 then 
+      if check_imm_0 && check_off_0 && check_src_r0 && check_dst_r0 then Some Pno_spec else None
+    else if Z.eqb (Z.shiftr op_val 5) 0x3 then (* Mode = MEM (0x60) *)
       let sz := Z.land (Z.shiftr op_val 3) 0x3 in (* Size bits 3-4 *)
       let mem_sz := match sz with
                     | 0x0 => Some Word
@@ -402,8 +403,8 @@ Definition compare_trace_at_pc (rs: regset) (trace: list int64) (addr_map: list 
   compare_trace_at_pc_aux R6 rs trace addr_map &&
   compare_trace_at_pc_aux R7 rs trace addr_map &&
   compare_trace_at_pc_aux R8 rs trace addr_map &&
-  compare_trace_at_pc_aux R9 rs trace addr_map (*&&
-  compare_trace_at_pc_aux R10 rs trace addr_map *).
+  compare_trace_at_pc_aux R9 rs trace addr_map &&
+  compare_trace_at_pc_aux RAX rs trace addr_map.
 
 Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (init_sp: int64)  
   (bpf_prog: ebpf_prog) (trace: list (list int64)) (st: outcome): bool :=
@@ -483,10 +484,11 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list code) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match jmp_table with
   | [] => (addr_map, m)
-  | h :: tl =>
+  | h1 :: tl =>
+    let (base, h) := h1 in
   (* we don't need to store the bytecode into memory as we directly access bpf_prog *)
     let (m1, pc_blk1) := Mem.alloc m 0 (Z.of_nat (8*(List.length h))) in
     let m2 :=
@@ -498,7 +500,7 @@ Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list code) (add
     let addr_map' := {| 
       base_blk := pc_blk1;
       size_blk := Z.of_nat (8*(List.length h));
-      base_addr := Int64.zero
+      base_addr := base
     |} :: addr_map in
       create_jump_table jmp_blk (ofs+8) tl addr_map' m2
   end.
@@ -516,7 +518,29 @@ Fixpoint create_bpf_maps (bpf_maps: list int64) (addr_map: list addr_region) (m:
       create_bpf_maps tl addr_map' m'
   end.
 
-Definition semantics_validation_aux (bpf_prog: ebpf_prog) (bpf_maps: list int64) (trace: list (list int64)) (ctx_base r10_base : int64): bool :=
+Fixpoint create_addr_map_sp (stk_blk: block) (sp_list: list int64) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+  match sp_list with
+  | [] => (addr_map, m)
+  | [h] =>
+    let addr_map' := {| 
+      base_blk := stk_blk;
+      size_blk := bpf_stack_size;
+      base_addr := Int64.sub h (Int64.repr bpf_stack_size)
+    |} :: addr_map in
+      (addr_map', m)
+  | h :: tl =>
+    (** because the begin of semantics_validation_aux has allocated the `stk_blk`, so here we first adding the addr_map, then allocate the next one *)
+    let addr_map' := {| 
+      base_blk := stk_blk;
+      size_blk := bpf_stack_size;
+      base_addr := Int64.sub h (Int64.repr bpf_stack_size)
+    |} :: addr_map in
+
+    let (m', stk_blk') := Mem.alloc m 0%Z bpf_stack_size in
+      create_addr_map_sp stk_blk' tl addr_map' m'
+  end.
+
+Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (ctx_base : int64) (sp_list: list int64): bool :=
   (** assume some information, only for testing *)
   let fuel := 1000 %nat in (* fixed fuel *)
   let ctx_size := 1000 %Z in (* fixed context memort size *)
@@ -524,55 +548,52 @@ Definition semantics_validation_aux (bpf_prog: ebpf_prog) (bpf_maps: list int64)
   (** initial_mem *)
   let m0 := Mem.empty in
   (* we don't need to store the bytecode into memory as we directly access bpf_prog *)
-  let (m1, pc_blk) := Mem.alloc m0 0 (Z.of_nat (8*(List.length (main_code bpf_prog)))) in
+  let (m1, pc_blk) := Mem.alloc m0 0 (Z.of_nat (8*(List.length bpf_prog))) in
   let (m2, ctx_blk) := Mem.alloc m1 0 ctx_size in
   let (m3, stk_blk) := Mem.alloc m2 0 bpf_stack_size in
   (*
     jmp_blk points to the jump_table used by tail_call functions: where
     - [i:i+7] stores a point to the jump_table[i]
   *)
-  let (m4, jmp_blk) := Mem.alloc m3 0 (Z.of_nat (8*(List.length (jump_table bpf_prog)))) in
+  let (m4, jmp_blk) := Mem.alloc m3 0 (Z.of_nat (8*(List.length jmp_table))) in
 
   (** addr_map: *)
   let addr_map := [
     {| 
       base_blk := pc_blk;
-      size_blk := Z.of_nat (8*(List.length (main_code bpf_prog)));
+      size_blk := Z.of_nat (8*(List.length bpf_prog));
       base_addr := Int64.zero  (** TODO we assume pc address is 0 here *) 
     |};
     {| 
       base_blk := ctx_blk;
       size_blk := ctx_size;
       base_addr := ctx_base
-    |};
-    {| 
-      base_blk := stk_blk;
-      size_blk := bpf_stack_size;
-      base_addr := Int64.sub r10_base (Int64.repr bpf_stack_size)
     |} ] in
-  let (addr_map5, m5) := create_jump_table jmp_blk 0%Z (jump_table bpf_prog) addr_map m4 in
-  let (addr_map', m') := create_bpf_maps (bpf_maps: list int64) addr_map5 m5 in
+  let (addr_map5, m5) := create_jump_table jmp_blk 0%Z jmp_table addr_map m4 in
+  let (addr_map6, m6) := create_bpf_maps (bpf_maps: list int64) addr_map5 m5 in
+
+  let (addr_map', m') := create_addr_map_sp stk_blk sp_list addr_map6 m6 in
+  let r10_base := match sp_list with | [] => (** should be impossible *) Int64.zero | h :: tl => h end in
 
   (** initial_regs *)
   let rs := create_initial_state ctx_blk stk_blk pc_blk in
   let init_st := (Next rs [] None 0%nat m') in (** None represents to execute the main_code *)
 
-    bpf_interpreter_trace_check fuel addr_map' r10_base bpf_prog trace init_st.
+    bpf_interpreter_trace_check fuel addr_map' r10_base 
+          {|  main_code := bpf_prog;
+              jump_table := List.map (fun x => snd x) jmp_table;
+              max_entries := jmp_table_max |}
+          trace init_st.
 
 (** trace stores [R0-R10] values executed by core.c of Linux eBPF VM *)
-Definition semantics_validation (bpf_prog: list int64) (jmp_table: list (list int64)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)): bool :=
+Definition semantics_validation (bpf_prog: code) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (sp_list: list int64): bool :=
   match trace with
   | [] => false
   | h :: t =>
     match List.nth_error h 1%nat with
     | None => false
     | Some ctx_base =>
-      match List.nth_error h 10%nat with
-      | None => false
-      | Some r10_base =>
-        semantics_validation_aux
-          {| main_code := bpf_prog;  jump_table := jmp_table; max_entries := jmp_table_max |}
-          bpf_maps trace ctx_base r10_base
-      end
+        semantics_validation_aux bpf_prog jmp_table jmp_table_max
+          bpf_maps trace ctx_base sp_list
     end
   end.

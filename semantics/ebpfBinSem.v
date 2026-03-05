@@ -1083,7 +1083,7 @@ Definition exec_tail_call (p: ebpf_prog) (rs: regset) (c_stk: cstk) (code_id: op
     match rs R2 with
     | Vptr b ofs =>
       if (Z.leb (Z.of_nat (max_entries p)) (Int64.unsigned i)) || 
-          (Nat.leb tail_call_cnt MAX_TAIL_CALL_CNT)
+          (Nat.leb MAX_TAIL_CALL_CNT tail_call_cnt)
       then
         Next (nextinstr rs) c_stk code_id tail_call_cnt m
       else
