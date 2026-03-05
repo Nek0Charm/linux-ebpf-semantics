@@ -159,9 +159,12 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
         end
       else None
 
-  (* ==================== MEMORY (LDX, LDX_PROBE, LDSX, LDSX_PROBE,  ST, STX) ==================== *)
+  (* ==================== MEMORY (LDX, LDX_PROBE, LDSX, LDSX_PROBE, ST_NOSPEC, ST, STX) ==================== *)
   else if is_ldx || is_st || is_stx then
     if Z.eqb (Z.shiftr op_val 5) 0x3 then (* Mode = MEM (0x60) *)
+      if Z.eqb op_val 0xc2 then 
+        if check_imm_0 && check_off_0 && check_src_r0 && ireg_eqb dst_reg R0 then Some Pno_spec else None
+      else
       let sz := Z.land (Z.shiftr op_val 3) 0x3 in (* Size bits 3-4 *)
       let mem_sz := match sz with
                     | 0x0 => Some Word
@@ -235,6 +238,12 @@ Definition decode_lddw_insn (dst_reg src_reg : ireg) (imm next_imm : int) : opti
   match src_reg with
   | R0 => Some (Plddw PSEUDO_Constant dst_reg imm next_imm)
   (* TODO : R1~R6 *)
+  | R1 => Some (Plddw PSEUDO_MAP_FD dst_reg imm next_imm)
+  | R5 => Some (Plddw PSEUDO_MAP_IDX dst_reg imm next_imm)
+  | R2 => Some (Plddw PSEUDO_MAP_VALUE dst_reg imm next_imm)
+  | R6 => Some (Plddw PSEUDO_MAP_IDX_VALUE dst_reg imm next_imm)
+  | R3 => Some (Plddw PSEUDO_BTF_ID dst_reg imm next_imm)
+  | R4 => Some (Plddw PSEUDO_FUNC dst_reg imm next_imm)
   | _ => None
   end.
 
@@ -277,18 +286,22 @@ Definition find_instr (pc : Z) (bpf_prog : code) : option instruction :=
     end
   end.
 
-Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: list int64) (st: outcome) (l_ptr: list int64)  (addr_map: list addr_region): outcome :=
+Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: ebpf_prog) (st: outcome) (addr_map: list addr_region): outcome :=
   match fuel with
   | O => Stuck (* assume we have enough fuel *)
   | S k =>
     match st with
     | Stuck => Stuck
-    | Next rs stk m =>
+    | Next rs stk code_id tail_call_cnt m =>
       match rs PC with
       | Vptr b ofs =>
-        match find_instr (Ptrofs.unsigned ofs) bpf_prog with
+        match find_code code_id bpf_prog with
         | None => Stuck
-        | Some i => bpf_interpreter k bpf_prog (exec_instr i rs stk m l_ptr addr_map) l_ptr addr_map
+        | Some c =>
+          match find_instr (Ptrofs.unsigned ofs) c with
+          | None => Stuck
+          | Some i => bpf_interpreter k bpf_prog (exec_instr bpf_prog i rs stk code_id tail_call_cnt m addr_map) addr_map
+          end
         end
       | _ => Stuck
       end
@@ -389,66 +402,70 @@ Definition compare_trace_at_pc (rs: regset) (trace: list int64) (addr_map: list 
   compare_trace_at_pc_aux R6 rs trace addr_map &&
   compare_trace_at_pc_aux R7 rs trace addr_map &&
   compare_trace_at_pc_aux R8 rs trace addr_map &&
-  compare_trace_at_pc_aux R9 rs trace addr_map &&
-  compare_trace_at_pc_aux R10 rs trace addr_map.
+  compare_trace_at_pc_aux R9 rs trace addr_map (*&&
+  compare_trace_at_pc_aux R10 rs trace addr_map *).
 
-Fixpoint bpf_interpreter_trace_check (fuel: nat) (l_ptr: list int64)  (addr_map: list addr_region) (init_sp: int64)  
-  (bpf_prog: list int64) (trace: list (list int64)) (st: outcome): bool :=
+Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (init_sp: int64)  
+  (bpf_prog: ebpf_prog) (trace: list (list int64)) (st: outcome): bool :=
   match fuel with
   | O => false (* assume we have fenouagh fuell *)
   | S k =>
     match st with
     | Stuck => false
-    | Next rs stk m =>
+    | Next rs stk code_id tail_call_cnt m =>
       match rs PC with
       | Vptr b ofs =>
-        match find_instr (Ptrofs.unsigned ofs) bpf_prog with
-        | None =>
-            let idx := Z.to_nat (Ptrofs.unsigned ofs) in 
-            match nth_error bpf_prog idx with
-            | Some raw_insn => debug_fail_decode ofs raw_insn
-            | None => debug_fail_decode_oob ofs
-            end
-        | Some ins =>
-          match ins with
-          | Pcall CallByStaticID i
-          | Pcall CallByBTF i =>
-          (** simulating external functions *)
-            match trace with
-            | [] => false
-            | h :: t =>
-              match t with
+        match find_code code_id bpf_prog with
+        | None => false
+        | Some c =>
+          match find_instr (Ptrofs.unsigned ofs) c with
+          | None =>
+              let idx := Z.to_nat (Ptrofs.unsigned ofs) in 
+              match nth_error c idx with
+              | Some raw_insn => debug_fail_decode ofs raw_insn
+              | None => debug_fail_decode_oob ofs
+              end
+          | Some ins =>
+            match ins with
+            | Pcall CallByStaticID i
+            | Pcall CallByBTF i =>
+            (** simulating external functions *)
+              match trace with
               | [] => false
-              | next_h :: next_t =>
-                (* Here we get R0 from next state *)
-                match List.nth_error next_h 0%nat with
-                | None => false
-                | Some r0 =>
-                (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
-                  bpf_interpreter_trace_check k l_ptr addr_map init_sp bpf_prog t
-                    (Next (nextinstr (rs#R0 <- (Vlong r0))) stk m)
+              | h :: t =>
+                match t with
+                | [] => false
+                | next_h :: next_t =>
+                  (* Here we get R0 from next state *)
+                  match List.nth_error next_h 0%nat with
+                  | None => false
+                  | Some r0 =>
+                  (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
+                    bpf_interpreter_trace_check k addr_map init_sp bpf_prog t
+                      (Next (nextinstr (rs#R0 <- (Vlong r0))) stk code_id tail_call_cnt m)
+                  end
                 end
               end
+            | _ =>
+              if is_final_state ins rs addr_map init_sp then
+                if compare_final_state rs trace addr_map then true
+                  else debug_fail_final ofs (rs R0) (rs R1) (rs R2) (rs R10)
+              else
+                match trace with
+                | [] => debug_fail_common 13
+                | h :: t => 
+                  if compare_trace_at_pc rs h addr_map then
+                    let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
+                    match next_st with
+                    | Stuck => 
+                      debug_fail_stuck ofs (rs R0) (rs R1) (rs R2) (rs R10)
+                    | _ => 
+                      bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
+                    end
+                  else
+                    debug_fail_step ofs (rs R0) (rs R1) (rs R2) (rs R10)
+                end
             end
-          | _ =>
-            if is_final_state ins rs addr_map init_sp then
-              if compare_final_state rs trace addr_map then true
-                else debug_fail_final ofs (rs R0) (rs R1) (rs R2) (rs R10)
-            else
-              match trace with
-              | [] => debug_fail_common 13
-              | h :: t => 
-                if compare_trace_at_pc rs h addr_map then
-                  let next_st := exec_instr ins rs stk m l_ptr addr_map in
-                  match next_st with
-                  | Stuck => 
-                    debug_fail_stuck ofs (rs R0) (rs R1) (rs R2) (rs R10)
-                  | _ => 
-                    bpf_interpreter_trace_check k l_ptr addr_map init_sp bpf_prog t next_st
-                  end
-                else
-                  debug_fail_step ofs (rs R0) (rs R1) (rs R2) (rs R10)
-              end
           end
         end
       | _ => false
@@ -466,22 +483,61 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Definition semantics_validation_aux (bpf_prog: list int64) (trace: list (list int64)) (l_ptr: list int64) (ctx_base r10_base : int64): bool :=
+Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list code) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+  match jmp_table with
+  | [] => (addr_map, m)
+  | h :: tl =>
+  (* we don't need to store the bytecode into memory as we directly access bpf_prog *)
+    let (m1, pc_blk1) := Mem.alloc m 0 (Z.of_nat (8*(List.length h))) in
+    let m2 :=
+      match Mem.storev Mint64 m1 (Vptr jmp_blk (Ptrofs.repr ofs)) (Vptr pc_blk1 Ptrofs.zero) with
+      | None => (**should be impossible *) m1
+      | Some m' => m'
+      end
+    in
+    let addr_map' := {| 
+      base_blk := pc_blk1;
+      size_blk := Z.of_nat (8*(List.length h));
+      base_addr := Int64.zero
+    |} :: addr_map in
+      create_jump_table jmp_blk (ofs+8) tl addr_map' m2
+  end.
+
+Fixpoint create_bpf_maps (bpf_maps: list int64) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+  match bpf_maps with
+  | [] => (addr_map, m)
+  | h :: tl =>
+    let (m', map_blk1) := Mem.alloc m 0%Z 100%Z in (* for simpilification, assuming the size is 100 *)
+    let addr_map' := {| 
+      base_blk := map_blk1;
+      size_blk := 100%Z;
+      base_addr := h
+    |} :: addr_map in
+      create_bpf_maps tl addr_map' m'
+  end.
+
+Definition semantics_validation_aux (bpf_prog: ebpf_prog) (bpf_maps: list int64) (trace: list (list int64)) (ctx_base r10_base : int64): bool :=
   (** assume some information, only for testing *)
   let fuel := 1000 %nat in (* fixed fuel *)
   let ctx_size := 1000 %Z in (* fixed context memort size *)
 
   (** initial_mem *)
   let m0 := Mem.empty in
-  let (m1, pc_blk) := Mem.alloc m0 0 (Z.of_nat (List.length bpf_prog)) in
+  (* we don't need to store the bytecode into memory as we directly access bpf_prog *)
+  let (m1, pc_blk) := Mem.alloc m0 0 (Z.of_nat (8*(List.length (main_code bpf_prog)))) in
   let (m2, ctx_blk) := Mem.alloc m1 0 ctx_size in
   let (m3, stk_blk) := Mem.alloc m2 0 bpf_stack_size in
+  (*
+    jmp_blk points to the jump_table used by tail_call functions: where
+    - [i:i+7] stores a point to the jump_table[i]
+  *)
+  let (m4, jmp_blk) := Mem.alloc m3 0 (Z.of_nat (8*(List.length (jump_table bpf_prog)))) in
 
   (** addr_map: *)
   let addr_map := [
     {| 
       base_blk := pc_blk;
-      size_blk := Z.of_nat (List.length bpf_prog);
+      size_blk := Z.of_nat (8*(List.length (main_code bpf_prog)));
       base_addr := Int64.zero  (** TODO we assume pc address is 0 here *) 
     |};
     {| 
@@ -494,14 +550,17 @@ Definition semantics_validation_aux (bpf_prog: list int64) (trace: list (list in
       size_blk := bpf_stack_size;
       base_addr := Int64.sub r10_base (Int64.repr bpf_stack_size)
     |} ] in
+  let (addr_map5, m5) := create_jump_table jmp_blk 0%Z (jump_table bpf_prog) addr_map m4 in
+  let (addr_map', m') := create_bpf_maps (bpf_maps: list int64) addr_map5 m5 in
 
   (** initial_regs *)
   let rs := create_initial_state ctx_blk stk_blk pc_blk in
+  let init_st := (Next rs [] None 0%nat m') in (** None represents to execute the main_code *)
 
-    bpf_interpreter_trace_check fuel l_ptr addr_map r10_base bpf_prog trace (Next rs [] m3).
+    bpf_interpreter_trace_check fuel addr_map' r10_base bpf_prog trace init_st.
 
 (** trace stores [R0-R10] values executed by core.c of Linux eBPF VM *)
-Definition semantics_validation (bpf_prog: list int64) (trace: list (list int64)) (l_ptr: list int64): bool :=
+Definition semantics_validation (bpf_prog: list int64) (jmp_table: list (list int64)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)): bool :=
   match trace with
   | [] => false
   | h :: t =>
@@ -511,7 +570,9 @@ Definition semantics_validation (bpf_prog: list int64) (trace: list (list int64)
       match List.nth_error h 10%nat with
       | None => false
       | Some r10_base =>
-        semantics_validation_aux bpf_prog trace l_ptr ctx_base r10_base
+        semantics_validation_aux
+          {| main_code := bpf_prog;  jump_table := jmp_table; max_entries := jmp_table_max |}
+          bpf_maps trace ctx_base r10_base
       end
     end
   end.
