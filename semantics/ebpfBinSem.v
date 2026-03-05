@@ -403,13 +403,17 @@ Definition map_sum_left {A B A': Type} (F: A -> A')  (x: A+B) : A'+B :=
 
 Definition eval_reg_immw (w:width) (rs : regset) (ri: ireg+int) : val :=
   match ri with
-  | inl i => rs i
-  | inr i => match w with
-             | W32 => Vint i
-             | W64 => Vlong (int64_of_int i)
-             end
+  | inl i =>
+    match w with
+    | W32 => match rs i with | Vlong i => Vint (Int.repr (Int64.unsigned i)) | _ => Vundef end
+    | W64 => rs i
+    end
+  | inr i =>
+    match w with
+    | W32 => Vint i
+    | W64 => Vlong (int64_of_int i)
+    end
   end.
-
 
 Definition eval_val_int (w:width)  (ri: val+int) : val :=
   match ri with
