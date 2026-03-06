@@ -1,6 +1,8 @@
 let fail_common_hook = ref (fun (_: Obj.t) -> false)
-let fail_common id =
-  !fail_common_hook (Obj.repr id)
+let debug_fail_common (msg: string) =
+  Printf.printf "\n[Trace Check Failed: COMMON ERROR]\n";
+  Printf.printf "  => Reason: %s\n" msg;
+  failwith "Verification Stuck"
 
 let fail_step_hook = ref (fun (_: Obj.t) (_: Obj.t) (_: Obj.t) (_: Obj.t) (_: Obj.t) -> false)
 let fail_step pc r0 r1 r2 r10 = 

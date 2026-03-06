@@ -1,6 +1,6 @@
 Require Import Coq.extraction.Extraction.
 Require Import ExtrOcamlBasic.
-Require Import ExtrOcamlString.
+Require Import ExtrOcamlNativeString.
 
 Require Import compcert.lib.Integers.
 Require Import compcert.common.Values.
@@ -15,7 +15,7 @@ Extract Constant Archi.big_endian => "false".
 
 Extraction Blacklist List String Int.
 
-Extract Constant debug_fail_common => "Debug_hooks.fail_common".
+Extract Inlined Constant debug_fail_common => "Debug_hooks.debug_fail_common".
 Extract Constant debug_fail_step  => "Debug_hooks.fail_step".
 Extract Constant debug_fail_stuck => "Debug_hooks.fail_stuck".
 Extract Constant debug_fail_final => "Debug_hooks.fail_final".

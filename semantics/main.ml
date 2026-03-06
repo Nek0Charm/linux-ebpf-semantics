@@ -18,6 +18,10 @@ let coq_Z_of_int64 n =
   if n = 0L then Z0
   else Zpos (positive_of_uint64 n)
 
+let rec coq_nat_of_int n =
+  if n <= 0 then Validation.O 
+  else Validation.S (coq_nat_of_int (n - 1))
+
 let compcert_int64_of_native (i: int64) =
   Int64.repr (coq_Z_of_int64 i)
 
@@ -193,9 +197,12 @@ let run_test filename verbose =
     in
 
     let result = semantics_validation 
-                    (cast_list prog_mock) 
-                    (cast_trace aligned_trace_mock) 
-                    (cast_list []) 
+                    (cast_list prog_mock)
+                    []
+                    (coq_nat_of_int 0)
+                    []
+                    (cast_trace aligned_trace_mock)
+                    [] 
     in
     
     if result then begin

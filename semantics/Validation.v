@@ -1,4 +1,4 @@
-From Coq Require Import ZArith List.
+From Coq Require Import ZArith List String.
 
 From compcert Require Import Coqlib Ctypes AST Integers.
 From compcert Require Import Maps Values Memory.
@@ -7,7 +7,7 @@ From bpf.ebpf Require Import ebpfBinSem.
 
 Import ListNotations.
 
-Definition debug_fail_common (id : Z) : bool := false.
+Parameter debug_fail_common : forall {A: Type}, string -> A.
 Definition debug_fail_step (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
 Definition debug_fail_stuck (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
 Definition debug_fail_final (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
@@ -453,7 +453,7 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                   else debug_fail_final ofs (rs R0) (rs R1) (rs R2) (rs R10)
               else
                 match trace with
-                | [] => debug_fail_common 13
+                | [] => debug_fail_common "Trace ended before program finished"
                 | h :: t => 
                   if compare_trace_at_pc rs h addr_map then
                     let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
