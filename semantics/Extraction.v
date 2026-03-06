@@ -15,6 +15,7 @@ Extract Constant Archi.big_endian => "false".
 
 Extraction Blacklist List String Int.
 
+Extract Inlined Constant force_eval => "(fun a b -> let _ = a in b)".
 Extract Inlined Constant debug_fail_common => "Debug_hooks.debug_fail_common".
 Extract Constant debug_fail_step  => "Debug_hooks.fail_step".
 Extract Constant debug_fail_stuck => "Debug_hooks.fail_stuck".

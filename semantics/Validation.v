@@ -7,6 +7,7 @@ From bpf.ebpf Require Import ebpfBinSem.
 
 Import ListNotations.
 
+Parameter force_eval : forall {A B : Type}, A -> B -> B.
 Parameter debug_fail_common : forall {A: Type}, string -> A.
 Definition debug_fail_step (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
 Definition debug_fail_stuck (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
