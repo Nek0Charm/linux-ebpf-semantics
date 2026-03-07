@@ -4,7 +4,7 @@ open Validation
 open Yojson.Safe.Util
 
 (* ========================================== *)
-(* Coq to OCaml Types *)
+(* 1. OCaml type to Coq type *)
 (* ========================================== *)
 let rec positive_of_uint64 n =
   if n = 0L then failwith "unreachable"
@@ -18,18 +18,18 @@ let coq_Z_of_int64 n =
   if n = 0L then Z0
   else Zpos (positive_of_uint64 n)
 
-let rec coq_nat_of_int n =
-  if n <= 0 then Validation.O 
-  else Validation.S (coq_nat_of_int (n - 1))
-
 let compcert_int64_of_native (i: int64) =
   Int64.repr (coq_Z_of_int64 i)
 
 let cast_list l = List.map compcert_int64_of_native l
 let cast_trace t = List.map cast_list t
 
+let rec coq_nat_of_int n =
+  if n <= 0 then Validation.O 
+  else Validation.S (coq_nat_of_int (n - 1))
+
 (* ========================================== *)
-(* JSON Parser *)
+(* 2. JSON Parser *)
 (* ========================================== *)
 let parse_uint64 json_node =
   let z_to_int64 z =
@@ -70,86 +70,7 @@ let load_traces_from_json filename =
   json |> to_list |> List.map parse_single_program
 
 (* ========================================== *)
-(* Debug Hooks Implimentation and Binding *)
-(* ========================================== *)
-
-let rec int64_of_positive = function
-  | XH -> 1L
-  | XO p -> Stdlib.Int64.shift_left (int64_of_positive p) 1
-  | XI p -> Stdlib.Int64.logor (Stdlib.Int64.shift_left (int64_of_positive p) 1) 1L
-
-let int64_of_coq_Z = function
-  | Z0 -> 0L
-  | Zpos p -> int64_of_positive p
-  | Zneg p -> Stdlib.Int64.neg (int64_of_positive p)
-
-let string_of_val = function
-  | Vundef -> "Vundef"
-  | Vint i -> Printf.sprintf "Vint(%Ld)" (int64_of_coq_Z i)
-  | Vlong l -> Printf.sprintf "Vlong(%Ld)" (int64_of_coq_Z l)
-  | Vptr (b, ofs) -> Printf.sprintf "Vptr(block=%Ld, ofs=%Ld)" (int64_of_positive b) (int64_of_coq_Z ofs)
-  | _ -> "Unsupported_Val"
-
-let print_debug_state reason pc r0 r1 r2 r10 =
-  Printf.printf "\n[Trace Check Failed: %s]\n" reason;
-  Printf.printf "  => PC Offset : %Ld\n" (int64_of_coq_Z pc);
-  Printf.printf "  => R0        : %s\n" (string_of_val r0);
-  Printf.printf "  => R1        : %s\n" (string_of_val r1);
-  Printf.printf "  => R2        : %s\n" (string_of_val r2);
-  Printf.printf "  => R10 (FP)  : %s\n" (string_of_val r10)
-
-let () =
-  Debug_hooks.fail_common_hook := (fun id_obj -> 
-    let id_z = (Obj.magic id_obj : Validation.z) in
-    let id_val = int64_of_coq_Z id_z in
-    
-    Printf.printf "\n[Trace Check Failed: COMMON ERROR]\n";
-    Printf.printf "  => Error ID : %Ld\n" id_val;
-    
-    false
-  );
-
-  Debug_hooks.fail_step_hook := (fun pc r0 r1 r2 r10 -> 
-    print_debug_state "STEP MISMATCH" 
-      (Obj.magic pc) (Obj.magic r0) (Obj.magic r1) (Obj.magic r2) (Obj.magic r10); 
-    false);
-    
-  Debug_hooks.fail_stuck_hook := (fun pc r0 r1 r2 r10 -> 
-    print_debug_state "EXECUTION STUCK" 
-      (Obj.magic pc) (Obj.magic r0) (Obj.magic r1) (Obj.magic r2) (Obj.magic r10); 
-    false);
-    
-  Debug_hooks.fail_final_hook := (fun pc r0 r1 r2 r10 -> 
-    print_debug_state "FINAL STATE MISMATCH" 
-      (Obj.magic pc) (Obj.magic r0) (Obj.magic r1) (Obj.magic r2) (Obj.magic r10); 
-    false);
-
-  Debug_hooks.fail_decode_hook := (fun pc_obj insn_obj -> 
-    let pc_z = (Obj.magic pc_obj : Validation.z) in
-    let insn_z = (Obj.magic insn_obj : Validation.z) in
-    
-    let pc_val = int64_of_coq_Z pc_z in
-    let insn_val = int64_of_coq_Z insn_z in
-    
-    Printf.printf "\n[Trace Check Failed: DECODE ERROR]\n";
-    Printf.printf "  => PC Offset : %Ld\n" pc_val;
-    Printf.printf "  => Raw Instr : 0x%016Lx\n" insn_val;
-    
-    false
-  );
-
-  Debug_hooks.fail_decode_oob_hook := (fun pc_obj -> 
-    let pc_z = (Obj.magic pc_obj : Validation.z) in
-    let pc_val = int64_of_coq_Z pc_z in
-    
-    Printf.printf "\n[Trace Check Failed: PC OUT OF BOUNDS]\n";
-    Printf.printf "  => PC Offset : %Ld\n" pc_val;
-    
-    false
-  )
-
-(* ========================================== *)
-(* Main Testing Program *)
+(* 3. Main Testing Program *)
 (* ========================================== *)
 let read_lines filename =
   let lines = ref [] in
@@ -222,6 +143,7 @@ let run_test filename verbose =
   end
 
 let () =
+  Debug_printer.init_hooks ();
   if not !Sys.interactive then begin
     if Array.length Sys.argv < 2 then
       Printf.printf "Usage: %s <trace_filename | all>\n" Sys.argv.(0)

@@ -8,10 +8,16 @@ From bpf.ebpf Require Import ebpfBinSem.
 Import ListNotations.
 
 Parameter force_eval : forall {A B : Type}, A -> B -> B.
+
 Definition debug_fail_common (str : string) : bool := false.
-Definition debug_fail_step (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
-Definition debug_fail_stuck (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
-Definition debug_fail_final (pc: Ptrofs.int) (r0 r1 r2 r10: val) : bool := false.
+
+(* err_code: 0=Step Mismatch, 1=Stuck, 2=Final Mismatch *)
+Definition debug_fail_exec (err_code: nat) 
+                           (pc: Ptrofs.int)
+                           (ins: instruction)
+                           (rs_before rs_after: regset)
+                           (expected_trace: list int64) : bool := false.
+
 Definition debug_fail_decode (pc: Ptrofs.int) (raw_insn: int64) : bool := false.
 Definition debug_fail_decode_oob (pc: Ptrofs.int) : bool := false.
 
@@ -362,14 +368,10 @@ Definition is_abstract_value_concrete_eq (av: val) (cv: int64) (addr_map: list a
   | _ => false
   end.
 
-Definition compare_final_state (rs: regset) (trace: list (list int64)) (addr_map: list addr_region): bool :=
-  match trace with
-  | [h] =>
-    match List.nth_error h 0%nat with
-    | None => false
-    | Some v => is_abstract_value_concrete_eq (rs R0) v addr_map
-    end
-  | _ => false
+Definition compare_final_state (rs: regset) (h: list int64) (addr_map: list addr_region): bool :=
+  match List.nth_error h 0%nat with
+  | None => false
+  | Some v => is_abstract_value_concrete_eq (rs R0) v addr_map
   end.
 
 Definition nat_of_ireg (r: ireg): nat :=
@@ -450,8 +452,11 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
               end
             | _ =>
               if is_final_state ins rs addr_map init_sp then
-                if compare_final_state rs trace addr_map then true
-                  else debug_fail_final ofs (rs R0) (rs R1) (rs R2) (rs R10)
+                match trace with
+                | [h] => if compare_final_state rs h addr_map then true
+                         else debug_fail_exec 2 ofs ins rs (Pregmap.init (Vlong Int64.zero)) h
+                | _ => false
+                end
               else
                 match trace with
                 | [] => debug_fail_common "Trace ended before program finished"
@@ -460,12 +465,19 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                     let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
                     match next_st with
                     | Stuck => 
-                      debug_fail_stuck ofs (rs R0) (rs R1) (rs R2) (rs R10)
-                    | _ => 
-                      bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
+                      debug_fail_exec 1 ofs ins rs (Pregmap.init (Vlong Int64.zero)) h
+                    | Next rs_after stk_after code_id tail_call_cnt m_after =>
+                      match t with
+                      | [] => bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
+                      | h_next :: _ =>
+                        if compare_trace_at_pc rs_after h_next addr_map then
+                          bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
+                        else
+                          debug_fail_exec 0 ofs ins rs rs_after h_next
+                      end
                     end
                   else
-                    debug_fail_step ofs (rs R0) (rs R1) (rs R2) (rs R10)
+                    debug_fail_exec 0 ofs ins (Pregmap.init (Vlong Int64.zero)) rs h
                 end
             end
           end
