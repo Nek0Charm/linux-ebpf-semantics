@@ -125,20 +125,20 @@ let string_of_val = function
   | Vptr (b, ofs) -> Printf.sprintf "Vptr(block=%Ld, ofs=%Ld)" (int64_of_positive b) (int64_of_coq_Z ofs)
   | _ -> "Unsupported_Val"
 
-let print_regset title (rs: Validation.ireg -> Validation.val0) =
+let print_regset title (rs: Validation.preg -> Validation.val0) =
   Printf.printf "  [%s]\n" title;
-  Printf.printf "    R0  : %s\n" (string_of_val (rs Validation.R0));
-  Printf.printf "    R1  : %s\n" (string_of_val (rs Validation.R1));
-  Printf.printf "    R2  : %s\n" (string_of_val (rs Validation.R2));
-  Printf.printf "    R3  : %s\n" (string_of_val (rs Validation.R3));
-  Printf.printf "    R4  : %s\n" (string_of_val (rs Validation.R4));
-  Printf.printf "    R5  : %s\n" (string_of_val (rs Validation.R5));
-  Printf.printf "    R6  : %s\n" (string_of_val (rs Validation.R6));
-  Printf.printf "    R7  : %s\n" (string_of_val (rs Validation.R7));
-  Printf.printf "    R8  : %s\n" (string_of_val (rs Validation.R8));
-  Printf.printf "    R9  : %s\n" (string_of_val (rs Validation.R9));
-  Printf.printf "    R10 : %s\n" (string_of_val (rs Validation.R10));
-  Printf.printf "    RAX : %s\n" (string_of_val (rs Validation.RAX))
+  Printf.printf "    R0  : %s\n" (string_of_val (rs (Validation.IR Validation.R0)));
+  Printf.printf "    R1  : %s\n" (string_of_val (rs (Validation.IR Validation.R1)));
+  Printf.printf "    R2  : %s\n" (string_of_val (rs (Validation.IR Validation.R2)));
+  Printf.printf "    R3  : %s\n" (string_of_val (rs (Validation.IR Validation.R3)));
+  Printf.printf "    R4  : %s\n" (string_of_val (rs (Validation.IR Validation.R4)));
+  Printf.printf "    R5  : %s\n" (string_of_val (rs (Validation.IR Validation.R5)));
+  Printf.printf "    R6  : %s\n" (string_of_val (rs (Validation.IR Validation.R6)));
+  Printf.printf "    R7  : %s\n" (string_of_val (rs (Validation.IR Validation.R7)));
+  Printf.printf "    R8  : %s\n" (string_of_val (rs (Validation.IR Validation.R8)));
+  Printf.printf "    R9  : %s\n" (string_of_val (rs (Validation.IR Validation.R9)));
+  Printf.printf "    R10 : %s\n" (string_of_val (rs (Validation.IR Validation.R10)));
+  Printf.printf "    RAX : %s\n" (string_of_val (rs (Validation.IR Validation.RAX)))
 
 let print_expected_trace expected_trace =
   Printf.printf "  [Expected JSON Trace State]\n";
@@ -179,8 +179,8 @@ let init_hooks () =
     in
     let pc = (Obj.magic pc_obj : Validation.z) in
     let insn = (Obj.magic ins_obj : Validation.instruction) in
-    let rs_before = (Obj.magic rs_before_obj : Validation.ireg -> Validation.val0) in
-    let rs_after = (Obj.magic rs_after_obj : Validation.ireg -> Validation.val0) in
+    let rs_before = (Obj.magic rs_before_obj : Validation.preg -> Validation.val0) in
+    let rs_after = (Obj.magic rs_after_obj : Validation.preg -> Validation.val0) in
     let expected = (Obj.magic expected_obj : Validation.z list) in 
     
     print_debug_state reason pc insn rs_before rs_after expected; 
