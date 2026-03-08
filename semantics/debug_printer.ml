@@ -147,7 +147,21 @@ let print_expected_trace expected_trace =
       Printf.printf "    R%d  : %Ld\n" i (int64_of_coq_Z v) 
   ) expected_trace
 
-let print_debug_state reason pc insn rs_before rs_after expected_trace =
+let print_addr_map (map: Validation.addr_region list) =
+  Printf.printf "  [Address Map (Memory Regions)]\n";
+  match map with
+  | [] -> Printf.printf "    (Empty)\n"
+  | _ ->
+    List.iteri (fun i r ->
+      Printf.printf "    Region %d: block=%Ld, size=%Ld, base_addr=%Ld\n"
+        i
+        (int64_of_positive r.Validation.base_blk)
+        (int64_of_coq_Z r.Validation.size_blk)
+        (int64_of_coq_Z r.Validation.base_addr)
+    ) map
+
+(* 💡 增加 addr_map 参数 *)
+let print_debug_state reason pc insn rs_before rs_after expected_trace addr_map =
   Printf.printf "\n================= DEBUG DUMP ====================\n";
   Printf.printf "[Trace Check Failed: %s]\n" reason;
   Printf.printf "  => PC Offset : %Ld\n" (int64_of_coq_Z pc);
@@ -158,6 +172,8 @@ let print_debug_state reason pc insn rs_before rs_after expected_trace =
   print_regset "State AFTER Execution (Coq)" rs_after;
   Printf.printf "\n";
   print_expected_trace expected_trace;
+  Printf.printf "\n";
+  print_addr_map addr_map;
   Printf.printf "=================================================\n"
 
 (* ==== 3. init debug hooks ==== *)
@@ -169,7 +185,7 @@ let init_hooks () =
     false
   );
 
-  Debug_hooks.fail_exec_hook := (fun err_obj pc_obj ins_obj rs_before_obj rs_after_obj expected_obj -> 
+  Debug_hooks.fail_exec_hook := (fun err_obj pc_obj ins_obj rs_before_obj rs_after_obj expected_obj addr_map_obj -> 
     let err_code = int_of_coq_nat (Obj.magic err_obj : Validation.nat) in
     let reason = match err_code with
       | 0 -> "STEP MISMATCH"
@@ -182,8 +198,9 @@ let init_hooks () =
     let rs_before = (Obj.magic rs_before_obj : Validation.preg -> Validation.val0) in
     let rs_after = (Obj.magic rs_after_obj : Validation.preg -> Validation.val0) in
     let expected = (Obj.magic expected_obj : Validation.z list) in 
+    let addr_map = (Obj.magic addr_map_obj : Validation.addr_region list) in 
     
-    print_debug_state reason pc insn rs_before rs_after expected; 
+    print_debug_state reason pc insn rs_before rs_after expected addr_map; 
     false
   );
 
