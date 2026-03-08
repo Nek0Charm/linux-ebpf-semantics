@@ -61,8 +61,16 @@ let parse_single_program prog_node =
       t |> member "regs" |> to_list |> List.map parse_uint64
     ) trace_nodes 
   in
+
+  let sp_list = 
+    prog_node |> member "sp_list" |> to_list |> List.map parse_uint64
+  in
+
+  let ctx_ptr =
+    prog_node |> member "ctx_ptr" |> parse_uint64
+  in
   
-  (prog_name, bpf_prog, trace)
+  (prog_name, bpf_prog, trace, sp_list, ctx_ptr)
 
 let load_traces_from_json filename =
   let path = Printf.sprintf "../trace/%s/%s_trace.json" filename filename in
@@ -96,7 +104,7 @@ let run_test filename verbose =
   
   let passed_count = ref 0 in
 
-  List.iteri (fun i (prog_name, prog_mock, trace_mock) ->
+  List.iteri (fun i (prog_name, prog_mock, trace_mock, sp_list, ctx_ptr) ->
     if verbose then begin
       Printf.printf "=================================================\n";
       Printf.printf "Validating Program [%d]: %s\n" (i + 1) prog_name;
@@ -106,15 +114,11 @@ let run_test filename verbose =
 
     (* Constuct initial state and align the timeline *)
     let aligned_trace_mock =
-      match trace_mock with
-      | [] -> []
-      | first_step :: _ ->
-          (* Get R1 and R10 values from the first step *)
-          let r1_ctx = List.nth first_step 1 in
-          let r10_stk = List.nth first_step 10 in
-          (* Initial state：R1 and R10 are initialized, others are 0 *)
-          let init_regs = [0L; r1_ctx; 0L; 0L; 0L; 0L; 0L; 0L; 0L; 0L; r10_stk] in
-          init_regs :: trace_mock
+        let r1_ctx = ctx_ptr in
+        let r10_stk = List.hd sp_list in
+        (* Initial state：R1 and R10 are initialized, others are 0 *)
+        let init_regs = [0L; r1_ctx; 0L; 0L; 0L; 0L; 0L; 0L; 0L; 0L; r10_stk] in
+        init_regs :: trace_mock
     in
 
     let result = semantics_validation 
@@ -123,7 +127,8 @@ let run_test filename verbose =
                     (coq_nat_of_int 0)
                     []
                     (cast_trace aligned_trace_mock)
-                    [] 
+                    (cast_list sp_list)
+                    (compcert_int64_of_native ctx_ptr)
     in
     
     if result then begin

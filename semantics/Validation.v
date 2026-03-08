@@ -599,14 +599,10 @@ Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int
           trace init_st.
 
 (** trace stores [R0-R10] values executed by core.c of Linux eBPF VM *)
-Definition semantics_validation (bpf_prog: code) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (sp_list: list int64): bool :=
+Definition semantics_validation (bpf_prog: code) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (sp_list: list int64) (ctx_ptr: int64): bool :=
   match trace with
   | [] => false
   | h :: t =>
-    match List.nth_error h 1%nat with
-    | None => false
-    | Some ctx_base =>
-        semantics_validation_aux bpf_prog jmp_table jmp_table_max
-          bpf_maps trace ctx_base sp_list
-    end
+    semantics_validation_aux bpf_prog jmp_table jmp_table_max
+      bpf_maps trace ctx_ptr sp_list
   end.
