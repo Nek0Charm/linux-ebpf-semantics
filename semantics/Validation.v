@@ -553,28 +553,7 @@ Fixpoint create_addr_map_sp (stk_blk: block) (sp_list: list int64) (addr_map: li
       create_addr_map_sp stk_blk' tl addr_map' m'
   end.
 
-Definition init_registers (ctx_list: list int64) (rs: regset): regset :=
-  match ctx_list with
-  | [] => rs
-  | r2 :: tl2 =>
-    match tl2 with
-    | [] => rs
-    | r3 :: tl3 =>
-      match tl3 with
-      | [] => rs
-      | r4 :: tl4 =>
-        match tl4 with
-        | [] => rs
-        | r5 :: _ => rs # R2 <- (Vlong r2) 
-                        # R3 <- (Vlong r3) 
-                        # R4 <- (Vlong r4) 
-                        # R5 <- (Vlong r5)
-        end
-      end
-    end
-  end. 
-
-Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (ctx_base : int64) (sp_list: list int64) (ctx_list: list int64): bool :=
+Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (ctx_base : int64) (sp_list: list int64): bool :=
   (** assume some information, only for testing *)
   let fuel := 1000 %nat in (* fixed fuel *)
   let ctx_size := 1000 %Z in (* fixed context memort size *)
@@ -611,8 +590,7 @@ Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int
 
   (** initial_regs *)
   let rs := create_initial_state ctx_blk stk_blk pc_blk in
-  let rs1 := init_registers ctx_list rs in
-  let init_st := (Next rs1 [] None 0%nat m') in (** None represents to execute the main_code *)
+  let init_st := (Next rs [] None 0%nat m') in (** None represents to execute the main_code *)
 
     bpf_interpreter_trace_check fuel addr_map' r10_base 
           {|  main_code := bpf_prog;
@@ -621,14 +599,14 @@ Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int
           trace init_st.
 
 (** trace stores [R0-R10] values executed by core.c of Linux eBPF VM *)
-Definition semantics_validation (bpf_prog: code) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (sp_list: list int64) (ctx_list: list int64): bool :=
+Definition semantics_validation (bpf_prog: code) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (sp_list: list int64): bool :=
   match trace with
   | [] => false
   | h :: t =>
-    match ctx_list with
-    | [] => false
-    | ctx_base :: tl =>
+    match List.nth_error h 1%nat with
+    | None => false
+    | Some ctx_base =>
         semantics_validation_aux bpf_prog jmp_table jmp_table_max
-          bpf_maps trace ctx_base sp_list tl
+          bpf_maps trace ctx_base sp_list
     end
   end.
