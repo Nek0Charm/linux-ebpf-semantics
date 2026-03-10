@@ -490,8 +490,8 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
   end.
 
 Definition create_initial_state (ctx stk pc: block): regset :=
-  (Pregmap.init (Vlong Int64.zero))
-  (* (Pregmap.init Vundef) *)
+  (* (Pregmap.init (Vlong Int64.zero)) *)
+  (Pregmap.init Vundef)
     # PC <- (Vptr pc Ptrofs.zero)
     # R10 <- (Vptr stk (Ptrofs.repr bpf_stack_size))
     (* # R10 <- (Vptr stk Ptrofs.zero) *)
