@@ -143,7 +143,7 @@ let print_regset title (rs: Validation.preg -> Validation.val0) =
 let print_expected_trace expected_trace =
   Printf.printf "  [Expected JSON Trace State]\n";
   List.iteri (fun i v ->
-    if i <= 10 then 
+    if i <= 11 then 
       Printf.printf "    R%d  : %Ld\n" i (int64_of_coq_Z v) 
   ) expected_trace
 
