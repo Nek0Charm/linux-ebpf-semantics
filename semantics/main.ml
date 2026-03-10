@@ -117,7 +117,7 @@ let run_test filename verbose =
         let r1_ctx = ctx_ptr in
         let r10_stk = List.hd sp_list in
         (* Initial state：R1 and R10 are initialized, others are 0 *)
-        let init_regs = [0L; r1_ctx; 0L; 0L; 0L; 0L; 0L; 0L; 0L; 0L; r10_stk] in
+        let init_regs = [0L; r1_ctx; 0L; 0L; 0L; 0L; 0L; 0L; 0L; 0L; r10_stk; 0L] in
         init_regs :: trace_mock
     in
 
