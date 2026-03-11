@@ -439,17 +439,13 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
               match trace with
               | [] => false
               | h :: t =>
-                match t with
-                | [] => false
-                | next_h :: next_t =>
-                  (* Here we get R0 from next state *)
-                  match List.nth_error next_h 0%nat with
-                  | None => false
-                  | Some r0 =>
-                  (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
-                    bpf_interpreter_trace_check k addr_map init_sp bpf_prog t
-                      (Next (nextinstr (rs#R0 <- (Vlong r0))) stk code_id tail_call_cnt m)
-                  end
+                (* Here we get R0 from current state *)
+                match List.nth_error h 0%nat with
+                | None => false
+                | Some r0 =>
+                (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
+                  bpf_interpreter_trace_check k addr_map init_sp bpf_prog t
+                    (Next (nextinstr (rs#R0 <- (Vlong r0))) stk code_id tail_call_cnt m)
                 end
               end
             | _ =>
@@ -463,8 +459,7 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                 match trace with
                 | [] => debug_fail_common "Trace ended before program finished"
                 | h :: t => 
-                  if compare_trace_at_pc rs h addr_map then
-                    let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
+                  let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
                     match next_st with
                     | Stuck => 
                       debug_fail_exec 1 ofs ins rs (Pregmap.init (Vlong Int64.zero)) h addr_map
@@ -478,8 +473,6 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                           debug_fail_exec 0 ofs ins rs rs_after h_next addr_map
                       end
                     end
-                  else
-                    debug_fail_exec 0 ofs ins (Pregmap.init (Vlong Int64.zero)) rs h addr_map
                 end
             end
           end
