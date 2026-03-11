@@ -1,5 +1,5 @@
-let fail_common_hook = ref (fun (_: Obj.t) -> false)
-let fail_common msg_chars = !fail_common_hook (Obj.repr msg_chars)
+let fail_common_hook = ref (fun (_: string) -> false)
+let fail_common msg = !fail_common_hook msg
 
 let fail_exec_hook = ref (fun (_: Obj.t) (_: Obj.t) (_: Obj.t) (_: Obj.t) (_: Obj.t) (_: Obj.t) (_: Obj.t) -> false)
 let fail_exec err_code pc ins rs_before rs_after expected_trace addr_map = 

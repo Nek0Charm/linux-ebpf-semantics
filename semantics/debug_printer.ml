@@ -15,9 +15,6 @@ let rec int_of_coq_nat = function
   | Validation.O -> 0
   | Validation.S n -> 1 + int_of_coq_nat n
 
-let string_of_char_list chars =
-  String.of_seq (List.to_seq chars)
-
 (* ==== 2. debug state printer ==== *)
 
 (* ==== 2.1. instruction's printer ==== *)
@@ -178,10 +175,9 @@ let print_debug_state reason pc insn rs_before rs_after expected_trace addr_map 
 
 (* ==== 3. init debug hooks ==== *)
 let init_hooks () =
-  Debug_hooks.fail_common_hook := (fun msg_obj ->
-    let msg_chars = (Obj.magic msg_obj : char list) in
+  Debug_hooks.fail_common_hook := (fun msg_str ->
     Printf.printf "\n[Trace Check Failed: COMMON ERROR]\n";
-    Printf.printf "  => Reason: %s\n" (string_of_char_list msg_chars);
+    Printf.printf "  => Reason: %s\n" msg_str;
     false
   );
 
