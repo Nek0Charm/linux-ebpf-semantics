@@ -34,7 +34,7 @@ let int64_of_off (o: Validation.off) = int64_of_coq_Z (Obj.magic o : Validation.
 let string_of_reg_or_imm (src: (Validation.ireg, Validation.imm) Validation.sum) =
   match src with
   | Validation.Inl r -> string_of_reg r
-  | Validation.Inr i -> Printf.sprintf "%Ld" (int64_of_imm i)
+  | Validation.Inr i -> Printf.sprintf "0x%LX" (int64_of_imm i)
 
 let string_of_aluOp (op: Validation.aluOp) =
   match op with
@@ -68,12 +68,12 @@ let string_of_insn (ins: Validation.instruction) =
         (string_of_reg dst) (int64_of_imm hi) (int64_of_imm lo)
 
   | Validation.Pload (sz, dst, src, off) ->
-      Printf.sprintf "load%s %s, [%s %s %Ld]"
+      Printf.sprintf "load%s %s, [%s %s 0x%LX]"
         (string_of_sizeOp sz) (string_of_reg dst) (string_of_reg src)
         (if int64_of_off off >= 0L then "+" else "") (int64_of_off off)
 
   | Validation.Pstore (sz, dst, src, off) ->
-      Printf.sprintf "store%s [%s %s %Ld], %s"
+      Printf.sprintf "store%s [%s %s 0x%LX], %s"
         (string_of_sizeOp sz) (string_of_reg dst) 
         (if int64_of_off off >= 0L then "+" else "") (int64_of_off off)
         (string_of_reg_or_imm src)
@@ -84,19 +84,19 @@ let string_of_insn (ins: Validation.instruction) =
         w_str (string_of_reg dst) (string_of_aluOp op) (string_of_reg_or_imm src)
 
   | Validation.Pjmp32 (imm) ->
-      Printf.sprintf "jmp32 %Ld" (int64_of_imm imm)
+      Printf.sprintf "jmp32 0x%LX" (int64_of_imm imm)
 
   | Validation.Pjmp64 (off) ->
-      Printf.sprintf "jmp %Ld" (int64_of_off off)
+      Printf.sprintf "jmp 0x%LX" (int64_of_off off)
 
   | Validation.Pjmpcmp (op, w, dst, src, off) ->
       let w_str = match w with Validation.W32 -> "32" | Validation.W64 -> "64" in
-      Printf.sprintf "jmp%s: if %s %s %s goto %Ld"
+      Printf.sprintf "jmp%s: if %s %s %s goto 0x%LX"
         w_str (string_of_reg dst) (string_of_cmpOp op) 
         (string_of_reg_or_imm src) (int64_of_off off)
 
   | Validation.Pcall (_, imm) ->
-      Printf.sprintf "call %Ld" (int64_of_imm imm)
+      Printf.sprintf "call 0x%LX" (int64_of_imm imm)
 
   | Validation.Pret -> 
       "exit (return)"
@@ -117,9 +117,9 @@ let string_of_insn (ins: Validation.instruction) =
 
 let string_of_val = function
   | Vundef -> "Vundef"
-  | Vint i -> Printf.sprintf "Vint(%Ld)" (int64_of_coq_Z i)
-  | Vlong l -> Printf.sprintf "Vlong(%Ld)" (int64_of_coq_Z l)
-  | Vptr (b, ofs) -> Printf.sprintf "Vptr(block=%Ld, ofs=%Ld)" (int64_of_positive b) (int64_of_coq_Z ofs)
+  | Vint i -> Printf.sprintf "Vint(0x%LX)" (int64_of_coq_Z i)
+  | Vlong l -> Printf.sprintf "Vlong(0x%LX)" (int64_of_coq_Z l)
+  | Vptr (b, ofs) -> Printf.sprintf "Vptr(block=0x%LX, ofs=0x%LX)" (int64_of_positive b) (int64_of_coq_Z ofs)
   | _ -> "Unsupported_Val"
 
 let print_regset title (rs: Validation.preg -> Validation.val0) =
@@ -141,7 +141,7 @@ let print_expected_trace expected_trace =
   Printf.printf "  [Expected JSON Trace State]\n";
   List.iteri (fun i v ->
     if i <= 11 then 
-      Printf.printf "    R%d  : %Ld\n" i (int64_of_coq_Z v) 
+      Printf.printf "    R%d  : 0x%LX\n" i (int64_of_coq_Z v) 
   ) expected_trace
 
 let print_addr_map (map: Validation.addr_region list) =
@@ -150,7 +150,7 @@ let print_addr_map (map: Validation.addr_region list) =
   | [] -> Printf.printf "    (Empty)\n"
   | _ ->
     List.iteri (fun i r ->
-      Printf.printf "    Region %d: block=%Ld, size=%Ld, base_addr=%Ld\n"
+      Printf.printf "    Region %d: block=0x%LX, size=0x%LX, base_addr=0x%LX\n"
         i
         (int64_of_positive r.Validation.base_blk)
         (int64_of_coq_Z r.Validation.size_blk)
@@ -161,7 +161,7 @@ let print_addr_map (map: Validation.addr_region list) =
 let print_debug_state reason pc insn rs_before rs_after expected_trace addr_map =
   Printf.printf "\n================= DEBUG DUMP ====================\n";
   Printf.printf "[Trace Check Failed: %s]\n" reason;
-  Printf.printf "  => PC Offset : %Ld\n" (int64_of_coq_Z pc);
+  Printf.printf "  => PC Offset : 0x%LX\n" (int64_of_coq_Z pc);
   Printf.printf "  => Instr     : %s\n\n" (string_of_insn insn);
   
   print_regset "State BEFORE Execution" rs_before;
@@ -204,7 +204,7 @@ let init_hooks () =
     let pc_z = (Obj.magic pc_obj : Validation.z) in
     let insn_z = (Obj.magic insn_obj : Validation.z) in
     Printf.printf "\n[Trace Check Failed: DECODE ERROR]\n";
-    Printf.printf "  => PC Offset : %Ld\n" (int64_of_coq_Z pc_z);
+    Printf.printf "  => PC Offset : 0x%LX\n" (int64_of_coq_Z pc_z);
     Printf.printf "  => Raw Instr : 0x%016Lx\n" (int64_of_coq_Z insn_z);
     false
   );
@@ -212,6 +212,6 @@ let init_hooks () =
   Debug_hooks.fail_decode_oob_hook := (fun pc_obj -> 
     let pc_z = (Obj.magic pc_obj : Validation.z) in
     Printf.printf "\n[Trace Check Failed: PC OUT OF BOUNDS]\n";
-    Printf.printf "  => PC Offset : %Ld\n" (int64_of_coq_Z pc_z);
+    Printf.printf "  => PC Offset : 0x%LX\n" (int64_of_coq_Z pc_z);
     false
   )
