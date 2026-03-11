@@ -337,6 +337,7 @@ Definition cast_address_abs_to_concrete (addr: val) (addr_map: list addr_region)
   | _ => None
   end.
 
+(*
 Definition is_final_state (ins: instruction) (rs: regset) (addr_map: list addr_region) (init_sp: int64): bool :=
   match ins with
   | Pret =>
@@ -346,6 +347,15 @@ Definition is_final_state (ins: instruction) (rs: regset) (addr_map: list addr_r
       | None => false
       | Some i => Int64.eq init_sp i
       end
+    | _ => false
+    end
+  | _ => false
+  end. *)
+Definition is_final_state (ins: instruction) (stk: cstk): bool :=
+  match ins with
+  | Pret =>
+    match stk with
+    | [] => true
     | _ => false
     end
   | _ => false
@@ -449,29 +459,25 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                 end
               end
             | _ =>
-              if is_final_state ins rs addr_map init_sp then
+              if is_final_state ins stk then
                 match trace with
-                | [h] => if compare_final_state rs h addr_map then true
-                         else debug_fail_exec 2 ofs ins rs (Pregmap.init (Vlong Int64.zero)) h addr_map
+                | [] => true
+                 (*| [h] => if compare_final_state rs h addr_map then true
+                         else debug_fail_exec 2 ofs ins rs (Pregmap.init (Vlong Int64.zero)) h addr_map *)
                 | _ => false
                 end
               else
-                match trace with
-                | [] => debug_fail_common "Trace ended before program finished"
-                | h :: t => 
-                  let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
-                    match next_st with
-                    | Stuck => 
-                      debug_fail_exec 1 ofs ins rs (Pregmap.init (Vlong Int64.zero)) h addr_map
-                    | Next rs_after stk_after code_id tail_call_cnt m_after =>
-                      match t with
-                      | [] => bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
-                      | h_next :: _ =>
-                        if compare_trace_at_pc rs_after h_next addr_map then
-                          bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
-                        else
-                          debug_fail_exec 0 ofs ins rs rs_after h_next addr_map
-                      end
+                let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
+                  match next_st with
+                  | Stuck => false
+                  | Next rs_after stk_after code_id tail_call_cnt m_after =>
+                    match trace with
+                    | [] => debug_fail_common "Trace ended before program finished"
+                    | h :: t => 
+                      if compare_trace_at_pc rs_after h addr_map then
+                        bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
+                      else
+                        debug_fail_exec 0 ofs ins rs rs_after h addr_map
                     end
                 end
             end

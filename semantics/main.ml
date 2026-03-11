@@ -113,20 +113,20 @@ let run_test filename verbose =
     end;
 
     (* Constuct initial state and align the timeline *)
-    let aligned_trace_mock =
+    (* let aligned_trace_mock =
         let r1_ctx = ctx_ptr in
         let r10_stk = List.hd sp_list in
         (* Initial state：R1 and R10 are initialized, others are 0 *)
         let init_regs = [0L; r1_ctx; 0L; 0L; 0L; 0L; 0L; 0L; 0L; 0L; r10_stk; 0L] in
         init_regs :: trace_mock
-    in
+    in *)
 
     let result = semantics_validation 
                     (cast_list prog_mock)
                     []
                     (coq_nat_of_int 0)
                     []
-                    (cast_trace aligned_trace_mock)
+                    (cast_trace trace_mock)
                     (cast_list sp_list)
                     (compcert_int64_of_native ctx_ptr)
     in
