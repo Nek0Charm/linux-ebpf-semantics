@@ -10,6 +10,11 @@ let int64_of_coq_Z = function
   | Validation.Zneg p -> Stdlib.Int64.neg (int64_of_positive p)
 ;;
 
+let rec int64_of_coq_nat = function
+  | Validation.O -> 0L
+  | Validation.S n -> Stdlib.Int64.add 1L (int64_of_coq_nat n)
+;;
+
 (* Custom Printers *)
 let format_val0 fmt v =
   let s = match v with
@@ -58,11 +63,16 @@ let format_z fmt (z_val: Validation.z) =
   Format.fprintf fmt "0x%LX" (int64_of_coq_Z z_val)
 ;;
 
+let format_nat fmt (n_val: Validation.nat) =
+  Format.fprintf fmt "%Ld" (int64_of_coq_nat n_val)
+;;
+
 #install_printer format_val0;;
 #install_printer format_chunk;;
 #install_printer format_mem;;
 #install_printer format_positive;;
 #install_printer format_z;;
+#install_printer format_nat;;
 
 #use "main.ml";;
 #trace Validation.compare_trace_at_pc;;
