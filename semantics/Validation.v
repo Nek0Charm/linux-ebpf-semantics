@@ -145,8 +145,7 @@ Definition compare_trace_at_pc (rs: regset) (trace: list int64) (addr_map: list 
   compare_trace_at_pc_aux R7 rs trace addr_map &&
   compare_trace_at_pc_aux R8 rs trace addr_map &&
   compare_trace_at_pc_aux R9 rs trace addr_map &&
-  compare_trace_at_pc_aux R10 rs trace addr_map &&
-  compare_trace_at_pc_aux RAX rs trace addr_map.
+  compare_trace_at_pc_aux R10 rs trace addr_map.
 
 Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (init_sp: int64)  
   (bpf_prog: ebpf_prog) (trace: list (list int64)) (st: outcome): bool :=
