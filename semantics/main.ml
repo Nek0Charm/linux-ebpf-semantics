@@ -120,19 +120,6 @@ let load_traces_from_json filename =
 (* ========================================== *)
 (* 3. Main Testing Program *)
 (* ========================================== *)
-let read_lines filename =
-  let lines = ref [] in
-  let chan = open_in filename in
-  try
-    while true do
-      let line = String.trim (input_line chan) in
-      if String.length line > 0 then
-        lines := line :: !lines
-    done;
-    []
-  with End_of_file ->
-    close_in chan;
-    List.rev !lines
 
 let run_test filename verbose =
   if verbose then Printf.printf "Loading JSON traces from %s...\n" filename;
@@ -192,16 +179,36 @@ let () =
   Debug_printer.init_hooks ();
   if not !Sys.interactive then begin
     if Array.length Sys.argv < 2 then
-      Printf.printf "Usage: %s <trace_filename | all>\n" Sys.argv.(0)
+      Printf.printf "Usage: %s <trace_filename | test_progs>\n" Sys.argv.(0)
     else
       let arg = Sys.argv.(1) in
-      if arg = "all" then begin
-        let summary_file = "../trace/summary_with_trace.txt" in
-        Printf.printf "Starting batch validation from %s...\n\n" summary_file;
-        let filenames = read_lines summary_file in
-        List.iter (fun f -> run_test f false) filenames;
-        Printf.printf "\nBatch validation finished.\n"
+      if arg = "test_progs" then begin
+        let dir_path = "../trace/test_progs/" in
+        try
+          (* 1. 获取目录下所有文件 *)
+          let files = Sys.readdir dir_path in
+          (* 2. 过滤出 .json 文件并去掉后缀，然后排序 *)
+          let test_names = 
+            Array.to_list files
+            |> List.filter (fun f -> Filename.check_suffix f ".json")
+            |> List.map (fun f -> Filename.chop_suffix f ".json")
+            |> List.sort String.compare
+          in
+          
+          Printf.printf "Starting batch validation for %d programs in %s...\n\n" 
+            (List.length test_names) dir_path;
+            
+          (* 3. 逐个执行 run_test，路径拼接为 "test_progs/文件名" *)
+          List.iter (fun name -> 
+            run_test (Printf.sprintf "test_progs/%s" name) false
+          ) test_names;
+          
+          Printf.printf "\nBatch validation for test_progs finished.\n"
+        with
+        | Sys_error msg -> Printf.printf "Error accessing directory: %s\n" msg
+        | e -> Printf.printf "An unexpected error occurred: %s\n" (Printexc.to_string e)
       end else begin
+        (* 如果不是 test_progs，则视为单个文件名执行 *)
         run_test arg true
       end
   end
