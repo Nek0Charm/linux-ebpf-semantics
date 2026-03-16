@@ -224,11 +224,12 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Definition create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * nat * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match jmp_table with
   | [] => (addr_map, m)
   | h1 :: tl =>
-    let (base, h) := h1 in
+    let (info, h) := h1 in
+      let (base, index) := info in
   (* we don't need to store the bytecode into memory as we directly access bpf_prog *)
     let (m1, pc_blk1) := Mem.alloc m 0 (Z.of_nat (8*(List.length h))) in
     let m2 :=
@@ -237,23 +238,22 @@ Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * c
       | Some m' => m'
       end
     in
-    let addr_map' := {| 
+    ({| 
       base_blk := pc_blk1;
-      size_blk := Z.of_nat (8*(List.length h));
+      size_blk := Z.of_nat (8*(List.length jmp_table));
       base_addr := base
-    |} :: addr_map in
-      create_jump_table jmp_blk (ofs+8) tl addr_map' m2
+    |} :: addr_map, m2)
   end.
 
-Fixpoint create_bpf_maps (bpf_maps: list int64) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Fixpoint create_bpf_maps (bpf_maps: list (nat * int64)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match bpf_maps with
   | [] => (addr_map, m)
   | h :: tl =>
-    let (m', map_blk1) := Mem.alloc m 0%Z 100%Z in (* for simpilification, assuming the size is 100 *)
+    let (m', map_blk1) := Mem.alloc m 0%Z (Z.of_nat (fst h)) in (* for simpilification, assuming the size is 100 *)
     let addr_map' := {| 
       base_blk := map_blk1;
-      size_blk := 100%Z;
-      base_addr := h
+      size_blk := Z.of_nat (fst h);
+      base_addr := snd h
     |} :: addr_map in
       create_bpf_maps tl addr_map' m'
   end.
@@ -269,7 +269,7 @@ Fixpoint create_addr_map_sp (stk_blk: block) (sp_list: list int64) (addr_map: li
     |} :: addr_map in
       (addr_map', m)
   | h :: tl =>
-    (** because the begin of semantics_validation_aux has allocated the `stk_blk`, so here we first adding the addr_map, then allocate the next one *)
+    (** because the begin of semantics_validation has allocated the `stk_blk`, so here we first adding the addr_map, then allocate the next one *)
     let addr_map' := {| 
       base_blk := stk_blk;
       size_blk := bpf_stack_size;
@@ -280,7 +280,13 @@ Fixpoint create_addr_map_sp (stk_blk: block) (sp_list: list int64) (addr_map: li
       create_addr_map_sp stk_blk' tl addr_map' m'
   end.
 
-Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (ctx_base : int64) (sp_list: list int64): bool :=
+Definition semantics_validation (bpf_prog: code)
+                                (ctx_ptr: int64)
+                                (bpf_maps: list (nat * int64))
+                                (trace: list (list int64))
+                                (jmp_table_max: nat)
+                                (jmp_table: list (int64 * nat * code))
+                                (sp_list: list int64) : bool :=
   (** assume some information, only for testing *)
   let fuel := 1000 %nat in (* fixed fuel *)
   let ctx_size := 1000 %Z in (* fixed context memort size *)
@@ -307,10 +313,10 @@ Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int
     {| 
       base_blk := ctx_blk;
       size_blk := ctx_size;
-      base_addr := ctx_base
+      base_addr := ctx_ptr
     |} ] in
   let (addr_map5, m5) := create_jump_table jmp_blk 0%Z jmp_table addr_map m4 in
-  let (addr_map6, m6) := create_bpf_maps (bpf_maps: list int64) addr_map5 m5 in
+  let (addr_map6, m6) := create_bpf_maps bpf_maps addr_map5 m5 in
 
   let (addr_map', m') := create_addr_map_sp stk_blk sp_list addr_map6 m6 in
   let r10_base := match sp_list with | [] => (** should be impossible *) Int64.zero | h :: tl => h end in
@@ -324,12 +330,3 @@ Definition semantics_validation_aux (bpf_prog: list int64) (jmp_table: list (int
               jump_table := List.map (fun x => snd x) jmp_table;
               max_entries := jmp_table_max |}
           trace init_st.
-
-(** trace stores [R0-R10] values executed by core.c of Linux eBPF VM *)
-Definition semantics_validation (bpf_prog: code) (jmp_table: list (int64 * code)) (jmp_table_max: nat) (bpf_maps: list int64) (trace: list (list int64)) (sp_list: list int64) (ctx_ptr: int64): bool :=
-  match trace with
-  | [] => false
-  | h :: t =>
-    semantics_validation_aux bpf_prog jmp_table jmp_table_max
-      bpf_maps trace ctx_ptr sp_list
-  end.

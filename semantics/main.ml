@@ -28,6 +28,19 @@ let rec coq_nat_of_int n =
   if n <= 0 then Validation.O 
   else Validation.S (coq_nat_of_int (n - 1))
 
+(* 转换 mem_block: (addr, size, ty) -> (nat * int64) *)
+let cast_mem_blocks l =
+  List.map (fun (size, addr) -> 
+    (coq_nat_of_int size, compcert_int64_of_native addr)
+  ) l
+
+(* 转换 jmp_table: (pc, map_ptr, index, target, insns) -> ((int64 * nat) * list int64) *)
+let cast_jmp_table l =
+  List.map (fun (map_ptr, index, insns) ->
+    (* 关键点：insns 本身是列表，需使用 cast_list 而非 compcert_int64_of_native *)
+    ((compcert_int64_of_native map_ptr, coq_nat_of_int index), cast_list insns)
+  ) l
+
 (* ========================================== *)
 (* 2. JSON Parser *)
 (* ========================================== *)
@@ -48,17 +61,32 @@ let parse_uint64 json_node =
   | `String s -> z_to_int64 (Zarith.of_string s)
   | _ -> failwith "Invalid number format in JSON"
 
+(* 解析内存块对象 *)
+let parse_mem_block node =
+  let base_addr = node |> member "base_addr" |> parse_uint64 in
+  let size = node |> member "size" |> to_int in
+  (size, base_addr)
+
+(* 解析跳转表条目 *)
+let parse_jmp_entry node =
+  let map_ptr = node |> member "map_ptr" |> parse_uint64 in
+  let index = node |> member "index" |> to_int in
+  let insns = node |> member "insns" |> to_list |> List.map parse_uint64 in
+  (map_ptr, index, insns)
+
 let parse_single_program prog_node =
   let prog_name = prog_node |> member "prog_name" |> to_string in
   
-  let bpf_prog = 
-    prog_node |> member "bpf_prog" |> to_list |> List.map parse_uint64 
+  (* 对应新的字段名 "prog_insn" *)
+  let prog_insn = 
+    prog_node |> member "prog_insn" |> to_list |> List.map parse_uint64 
   in
   
+  (* 对应新的 Trace 结构：直接是 string list list *)
   let trace_nodes = prog_node |> member "trace" |> to_list in
   let trace = 
-    List.map (fun t ->
-      t |> member "regs" |> to_list |> List.map parse_uint64
+    List.map (fun t_node ->
+      t_node |> to_list |> List.map parse_uint64
     ) trace_nodes 
   in
 
@@ -69,11 +97,23 @@ let parse_single_program prog_node =
   let ctx_ptr =
     prog_node |> member "ctx_ptr" |> parse_uint64
   in
+
+  let mem_blocks = 
+    prog_node |> member "mem_blocks" |> to_list |> List.map parse_mem_block 
+  in
   
-  (prog_name, bpf_prog, trace, sp_list, ctx_ptr)
+  let jmp_table_cnt =
+    prog_node |> member "jmp_table_cnt" |> to_int
+  in
+
+  let jmp_table = 
+    prog_node |> member "jmp_table" |> to_list |> List.map parse_jmp_entry 
+  in
+  
+  (prog_name, prog_insn, trace, sp_list, ctx_ptr, mem_blocks, jmp_table_cnt, jmp_table)
 
 let load_traces_from_json filename =
-  let path = Printf.sprintf "../trace/%s/%s_trace.json" filename filename in
+  let path = Printf.sprintf "../trace/%s.json" filename in
   let json = Yojson.Safe.from_file path in
   json |> to_list |> List.map parse_single_program
 
@@ -104,7 +144,7 @@ let run_test filename verbose =
   
   let passed_count = ref 0 in
 
-  List.iteri (fun i (prog_name, prog_mock, trace_mock, sp_list, ctx_ptr) ->
+  List.iteri (fun i (prog_name, prog_mock, trace_mock, sp_list, ctx_ptr, mem_blocks, jmp_table_cnt, jmp_table) ->
     if verbose then begin
       Printf.printf "=================================================\n";
       Printf.printf "Validating Program [%d]: %s\n" (i + 1) prog_name;
@@ -123,12 +163,13 @@ let run_test filename verbose =
 
     let result = semantics_validation 
                     (cast_list prog_mock)
-                    []
-                    (coq_nat_of_int 0)
-                    []
-                    (cast_trace trace_mock)
-                    (cast_list sp_list)
                     (compcert_int64_of_native ctx_ptr)
+                    (cast_mem_blocks mem_blocks)
+                    (cast_trace trace_mock)
+                    (coq_nat_of_int jmp_table_cnt)
+                    (cast_jmp_table jmp_table)
+                    (cast_list sp_list)
+                    
     in
     
     if result then begin
