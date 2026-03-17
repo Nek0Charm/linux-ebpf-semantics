@@ -24,21 +24,20 @@ let compcert_int64_of_native (i: int64) =
 let cast_list l = List.map compcert_int64_of_native l
 let cast_trace t = List.map cast_list t
 
-let rec coq_nat_of_int n =
-  if n <= 0 then Validation.O 
-  else Validation.S (coq_nat_of_int (n - 1))
+let coq_Z_of_int n =
+  coq_Z_of_int64 (Stdlib.Int64.of_int n)
 
 (* 转换 mem_block: (addr, size, ty) -> (nat * int64) *)
 let cast_mem_blocks l =
   List.map (fun (size, addr) -> 
-    (coq_nat_of_int size, compcert_int64_of_native addr)
+    (coq_Z_of_int size, compcert_int64_of_native addr)
   ) l
 
 (* 转换 jmp_table: (pc, map_ptr, index, target, insns) -> ((int64 * nat) * list int64) *)
 let cast_jmp_table l =
   List.map (fun (map_ptr, index, insns) ->
     (* 关键点：insns 本身是列表，需使用 cast_list 而非 compcert_int64_of_native *)
-    ((compcert_int64_of_native map_ptr, coq_nat_of_int index), cast_list insns)
+    ((compcert_int64_of_native map_ptr, coq_Z_of_int index), cast_list insns)
   ) l
 
 (* ========================================== *)
@@ -153,7 +152,7 @@ let run_test filename verbose =
                     (compcert_int64_of_native ctx_ptr)
                     (cast_mem_blocks mem_blocks)
                     (cast_trace trace_mock)
-                    (coq_nat_of_int jmp_table_cnt)
+                    (coq_Z_of_int jmp_table_cnt)
                     (cast_jmp_table jmp_table)
                     (cast_list sp_list)
                     

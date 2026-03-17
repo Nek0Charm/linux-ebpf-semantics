@@ -249,7 +249,7 @@ Definition code := list int64 (*instruction *).
 Record ebpf_prog := {
   main_code: code;
   jump_table: list code;
-  max_entries: nat;
+  max_entries: Z;
 }.
 
 Record function : Type := mkfunction {fn_sig: signature; fn_stksz: Z; fn_code: code}.

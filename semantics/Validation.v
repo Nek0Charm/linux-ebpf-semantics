@@ -228,7 +228,7 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * nat * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * Z * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match jmp_table with
   | [] => (addr_map, m)
   | h1 :: tl =>
@@ -250,14 +250,14 @@ Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * n
       create_jump_table jmp_blk (ofs+8) tl addr_map m2
   end.
 
-Fixpoint create_bpf_maps (bpf_maps: list (nat * int64)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Fixpoint create_bpf_maps (bpf_maps: list (Z * int64)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match bpf_maps with
   | [] => (addr_map, m)
   | h :: tl =>
-    let (m', map_blk1) := Mem.alloc m 0%Z (Z.of_nat (fst h)) in (* for simpilification, assuming the size is 100 *)
+    let (m', map_blk1) := Mem.alloc m 0%Z (fst h) in (* for simpilification, assuming the size is 100 *)
     let addr_map' := {| 
       base_blk := map_blk1;
-      size_blk := Z.of_nat (fst h);
+      size_blk := fst h;
       base_addr := snd h
     |} :: addr_map in
       create_bpf_maps tl addr_map' m'
@@ -287,10 +287,10 @@ Fixpoint create_addr_map_sp (stk_blk: block) (sp_list: list int64) (addr_map: li
 
 Definition semantics_validation (bpf_prog: code)
                                 (ctx_ptr: int64)
-                                (bpf_maps: list (nat * int64))
+                                (bpf_maps: list (Z * int64))
                                 (trace: list (list int64))
-                                (jmp_table_max: nat)
-                                (jmp_table: list (int64 * nat * code))
+                                (jmp_table_max: Z)
+                                (jmp_table: list (int64 * Z * code))
                                 (sp_list: list int64) : bool :=
   (** assume some information, only for testing *)
   let fuel := 1000 %nat in (* fixed fuel *)
