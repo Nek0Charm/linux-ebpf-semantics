@@ -174,44 +174,53 @@ let print_debug_state reason pc insn rs_before rs_after expected_trace addr_map 
   Printf.printf "=================================================\n"
 
 (* ==== 3. init debug hooks ==== *)
-let init_hooks () =
-  Debug_hooks.fail_common_hook := (fun msg_str ->
-    Printf.printf "\n[Trace Check Failed: COMMON ERROR]\n";
-    Printf.printf "  => Reason: %s\n" msg_str;
-    false
-  );
+let init_hooks verbose =
+  (* 只有 verbose 为 true 时才注册带打印功能的钩子 *)
+  if verbose then begin
+    Debug_hooks.fail_common_hook := (fun msg_str ->
+      Printf.printf "\n[Trace Check Failed: COMMON ERROR]\n";
+      Printf.printf "  => Reason: %s\n" msg_str;
+      false
+    );
 
-  Debug_hooks.fail_exec_hook := (fun err_obj pc_obj ins_obj rs_before_obj rs_after_obj expected_obj addr_map_obj -> 
-    let err_code = int_of_coq_nat (Obj.magic err_obj : Validation.nat) in
-    let reason = match err_code with
-      | 0 -> "STEP MISMATCH"
-      | 1 -> "EXECUTION STUCK"
-      | 2 -> "FINAL STATE MISMATCH"
-      | _ -> "UNKNOWN EXECUTION ERROR"
-    in
-    let pc = (Obj.magic pc_obj : Validation.z) in
-    let insn = (Obj.magic ins_obj : Validation.instruction) in
-    let rs_before = (Obj.magic rs_before_obj : Validation.preg -> Validation.val0) in
-    let rs_after = (Obj.magic rs_after_obj : Validation.preg -> Validation.val0) in
-    let expected = (Obj.magic expected_obj : Validation.z list) in 
-    let addr_map = (Obj.magic addr_map_obj : Validation.addr_region list) in 
-    
-    print_debug_state reason pc insn rs_before rs_after expected addr_map; 
-    false
-  );
+    Debug_hooks.fail_exec_hook := (fun err_obj pc_obj ins_obj rs_before_obj rs_after_obj expected_obj addr_map_obj -> 
+      let err_code = int_of_coq_nat (Obj.magic err_obj : Validation.nat) in
+      let reason = match err_code with
+        | 0 -> "STEP MISMATCH"
+        | 1 -> "EXECUTION STUCK"
+        | 2 -> "FINAL STATE MISMATCH"
+        | _ -> "UNKNOWN EXECUTION ERROR"
+      in
+      let pc = (Obj.magic pc_obj : Validation.z) in
+      let insn = (Obj.magic ins_obj : Validation.instruction) in
+      let rs_before = (Obj.magic rs_before_obj : Validation.preg -> Validation.val0) in
+      let rs_after = (Obj.magic rs_after_obj : Validation.preg -> Validation.val0) in
+      let expected = (Obj.magic expected_obj : Validation.z list) in 
+      let addr_map = (Obj.magic addr_map_obj : Validation.addr_region list) in 
+      
+      print_debug_state reason pc insn rs_before rs_after expected addr_map; 
+      false
+    );
 
-  Debug_hooks.fail_decode_hook := (fun pc_obj insn_obj -> 
-    let pc_z = (Obj.magic pc_obj : Validation.z) in
-    let insn_z = (Obj.magic insn_obj : Validation.z) in
-    Printf.printf "\n[Trace Check Failed: DECODE ERROR]\n";
-    Printf.printf "  => PC Offset : 0x%Ld\n" (int64_of_coq_Z pc_z);
-    Printf.printf "  => Raw Instr : 0x%016Lx\n" (int64_of_coq_Z insn_z);
-    false
-  );
+    Debug_hooks.fail_decode_hook := (fun pc_obj insn_obj -> 
+      let pc_z = (Obj.magic pc_obj : Validation.z) in
+      let insn_z = (Obj.magic insn_obj : Validation.z) in
+      Printf.printf "\n[Trace Check Failed: DECODE ERROR]\n";
+      Printf.printf "  => PC Offset : 0x%Ld\n" (int64_of_coq_Z pc_z);
+      Printf.printf "  => Raw Instr : 0x%016Lx\n" (int64_of_coq_Z insn_z);
+      false
+    );
 
-  Debug_hooks.fail_decode_oob_hook := (fun pc_obj -> 
-    let pc_z = (Obj.magic pc_obj : Validation.z) in
-    Printf.printf "\n[Trace Check Failed: PC OUT OF BOUNDS]\n";
-    Printf.printf "  => PC Offset : 0x%Ld\n" (int64_of_coq_Z pc_z);
-    false
-  )
+    Debug_hooks.fail_decode_oob_hook := (fun pc_obj -> 
+      let pc_z = (Obj.magic pc_obj : Validation.z) in
+      Printf.printf "\n[Trace Check Failed: PC OUT OF BOUNDS]\n";
+      Printf.printf "  => PC Offset : 0x%Ld\n" (int64_of_coq_Z pc_z);
+      false
+    )
+  end else begin
+    (* 如果 verbose 为 false，注册“静默”钩子，只返回 false 不打印 *)
+    Debug_hooks.fail_common_hook := (fun _ -> false);
+    Debug_hooks.fail_exec_hook := (fun _ _ _ _ _ _ _ -> false);
+    Debug_hooks.fail_decode_hook := (fun _ _ -> false);
+    Debug_hooks.fail_decode_oob_hook := (fun _ -> false)
+  end

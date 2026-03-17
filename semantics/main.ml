@@ -121,6 +121,7 @@ let load_traces_from_json filename =
 (* ========================================== *)
 
 let run_test filename verbose =
+  Debug_printer.init_hooks verbose;
   if verbose then Printf.printf "Loading JSON traces from %s...\n" filename;
   
   let programs = load_traces_from_json filename in
@@ -175,7 +176,6 @@ let run_test filename verbose =
   end
 
 let () =
-  Debug_printer.init_hooks ();
   if not !Sys.interactive then begin
     if Array.length Sys.argv < 2 then
       Printf.printf "Usage: %s <trace_filename | test_progs>\n" Sys.argv.(0)
