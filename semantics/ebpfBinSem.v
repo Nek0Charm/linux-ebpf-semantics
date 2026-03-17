@@ -460,6 +460,38 @@ Definition exec_jmpcmp (op: cmpOp) (w: width) (r: ireg) (ri: ireg+imm) (o: off) 
   end.
  *)
 
+ 
+Fixpoint cast_i2p (v: int64) (addr_map: list addr_region): option val :=
+  match addr_map with
+  | [] => None
+  | h :: t =>
+    let upper := Int64.add (base_addr h) (Int64.repr (size_blk h)) in
+    let ofs   := Ptrofs.of_int64 (Int64.sub v (base_addr h)) in
+      if (Int64.cmpu Cle (base_addr h) v) && (Int64.cmpu Clt v upper) then
+        Some (Vptr (base_blk h) ofs)
+      else
+        cast_i2p v t
+  end.
+
+  (*
+(** TODO: pseudo_ptr_ty should be used following the implementation of resolve_pseudo_ldimm64 in verifier.c  *)
+Fixpoint cast_i2p_aux (ty: pseudo_ptr_ty) (v: int64) (b: block) (ofs: ptrofs) (l_ptr: list int64) (addr_map: list addr_region) : option val :=
+  match l_ptr with
+  | [] => Some (Vlong v)
+  | h :: tl =>
+    if Int64.eq h (Ptrofs.to_int64 ofs) then
+      (** for eBPF program, instruction [i.e. LDDW (+ external call for the validation purpose)] at pc: the result should be computed as a pointer *)
+      find_abstract_address v addr_map
+    else
+      cast_i2p_aux ty v b ofs tl addr_map
+  end.
+
+Definition cast_i2p (ty: pseudo_ptr_ty) (v: int64) (pc: val) (l_ptr: list int64) (addr_map: list addr_region): option val :=
+  match pc with
+  | Vptr b ofs => cast_i2p_aux ty v b ofs l_ptr addr_map
+  | _ => None
+  end. *)
+
 
 Definition load (k: sizeOp) (addr:val) (m: mem) :=
   match k with
@@ -475,11 +507,21 @@ Definition load_value_casting (v: val): val :=
   | Vint i => Vlong (Int64.repr (Int.unsigned i))
   | _ => v
   end.
-  
-Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) :=
-  match load k (Val.offset_ptr rs#r' o) m with
+
+Definition exec_load (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) (addr_map: list addr_region) :=
+  match
+    match rs#r' with
+    | Vlong vl =>
+      cast_i2p (Int64.add vl (Int64.repr (Ptrofs.signed o))) addr_map
+    | Vptr _ _ => Some (Val.offset_ptr rs#r' o)
+    | _ => None
+    end with
   | None => Stuck
-  | Some v => Next (nextinstr (rs#r <- (load_value_casting v))) c_stk code_id tail_call_cnt m
+  | Some addr =>
+    match load k addr m with
+    | None => Stuck
+    | Some v => Next (nextinstr (rs#r <- (load_value_casting v))) c_stk code_id tail_call_cnt m
+    end
   end.
 
 Definition exec_load_probe (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) :=
@@ -538,37 +580,6 @@ Definition exec_store (k: sizeOp) (r:ireg) (ri:ireg+int) (o:Ptrofs.int) (rs: reg
   | None => Stuck
   | Some m' => Next (nextinstr rs) c_stk code_id tail_call_cnt m'
   end.
-
-Fixpoint cast_i2p (v: int64) (addr_map: list addr_region): option val :=
-  match addr_map with
-  | [] => None
-  | h :: t =>
-    let upper := Int64.add (base_addr h) (Int64.repr (size_blk h)) in
-    let ofs   := Ptrofs.of_int64 (Int64.sub v (base_addr h)) in
-      if (Int64.cmpu Cle (base_addr h) v) && (Int64.cmpu Clt v upper) then
-        Some (Vptr (base_blk h) ofs)
-      else
-        cast_i2p v t
-  end.
-
-  (*
-(** TODO: pseudo_ptr_ty should be used following the implementation of resolve_pseudo_ldimm64 in verifier.c  *)
-Fixpoint cast_i2p_aux (ty: pseudo_ptr_ty) (v: int64) (b: block) (ofs: ptrofs) (l_ptr: list int64) (addr_map: list addr_region) : option val :=
-  match l_ptr with
-  | [] => Some (Vlong v)
-  | h :: tl =>
-    if Int64.eq h (Ptrofs.to_int64 ofs) then
-      (** for eBPF program, instruction [i.e. LDDW (+ external call for the validation purpose)] at pc: the result should be computed as a pointer *)
-      find_abstract_address v addr_map
-    else
-      cast_i2p_aux ty v b ofs tl addr_map
-  end.
-
-Definition cast_i2p (ty: pseudo_ptr_ty) (v: int64) (pc: val) (l_ptr: list int64) (addr_map: list addr_region): option val :=
-  match pc with
-  | Vptr b ofs => cast_i2p_aux ty v b ofs l_ptr addr_map
-  | _ => None
-  end. *)
 
 Definition exec_lddw (ty: pseudo_ptr_ty) (r:ireg) (lo hi: imm) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) (addr_map: list addr_region) :=
   let v := Int64.ofwords hi lo in
@@ -765,26 +776,37 @@ Definition exec_ret (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_
 
 Definition MAX_TAIL_CALL_CNT: nat := 33.
 
-Definition exec_tail_call (p: ebpf_prog) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) :=
+Definition exec_tail_call_addr (r2: val) (addr_map: list addr_region): option val :=
+  match r2 with
+  | Vptr b ofs => Some r2
+  | Vlong vl => cast_i2p vl addr_map
+  | _ => None
+  end.
+
+Definition exec_tail_call (p: ebpf_prog) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) (addr_map: list addr_region) :=
   match rs R3 with
   | Vlong i =>
-    match rs R2 with
-    | Vptr b ofs =>
-      if (Z.leb (Z.of_nat (max_entries p)) (Int64.unsigned i)) || 
-          (Nat.leb MAX_TAIL_CALL_CNT tail_call_cnt)
-      then
-        Next (nextinstr rs) c_stk code_id tail_call_cnt m
-      else
-        match Mem.loadv Mint64 m (Val.offset_ptr (rs R2) (Ptrofs.of_int64u (Int64.mul i (Int64.repr 8%Z)))) with
-        | None => Stuck
-        | Some res =>
-          match res with
-          | Vptr b' ofs' =>
-            Next (rs#PC <- res) c_stk (Some (Z.to_nat (Int64.unsigned i))) (tail_call_cnt+1) m
-          | _ => Next (nextinstr rs) c_stk code_id tail_call_cnt m
+    match exec_tail_call_addr (rs R2) addr_map with
+    | None => Stuck
+    | Some r2_ptr =>
+      match r2_ptr with
+      | Vptr b ofs =>
+        if (Z.leb (Z.of_nat (max_entries p)) (Int64.unsigned i)) || 
+            (Nat.leb MAX_TAIL_CALL_CNT tail_call_cnt)
+        then
+          Next (nextinstr rs) c_stk code_id tail_call_cnt m
+        else
+          match Mem.loadv Mint64 m (Val.offset_ptr r2_ptr (Ptrofs.of_int64u (Int64.mul i (Int64.repr 8%Z)))) with
+          | None => Next (nextinstr rs) c_stk code_id tail_call_cnt m
+          | Some res =>
+            match res with
+            | Vptr b' ofs' =>
+              Next (rs#PC <- res) c_stk (Some (Z.to_nat (Int64.unsigned i))) (tail_call_cnt+1) m
+            | _ => Next (nextinstr rs) c_stk code_id tail_call_cnt m
+            end
           end
-        end
-    | _ => Stuck
+      | _ => Stuck
+      end
     end
   | _ => Stuck
   end.
@@ -803,8 +825,8 @@ Definition exec_instr (p: ebpf_prog) (i: instruction) (rs:regset) (c_stk: cstk) 
   | Pload_probe k r r' o     => exec_load_probe k r r' o rs c_stk code_id tail_call_cnt m
   | Ploadsx_probe k r r' o   => exec_loadsx_probe k r r' o rs c_stk code_id tail_call_cnt m
   | Pno_spec              => Next (nextinstr rs) c_stk code_id tail_call_cnt m
-  | Ptail_call            => exec_tail_call p rs c_stk code_id tail_call_cnt m
-  | Pload k r r' o        => exec_load k r r' o rs c_stk code_id tail_call_cnt m
+  | Ptail_call            => exec_tail_call p rs c_stk code_id tail_call_cnt m addr_map
+  | Pload k r r' o        => exec_load k r r' o rs c_stk code_id tail_call_cnt m addr_map
   | Pstore k r ri o       => exec_store k r ri o rs c_stk code_id tail_call_cnt m
   | Palu op w r ri        => exec_alu op w r ri rs c_stk code_id tail_call_cnt m
   | Pjmp32 i              => exec_jmp32 i rs c_stk code_id tail_call_cnt m

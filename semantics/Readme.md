@@ -11,13 +11,13 @@ dune build
 See overall result:
 
 ```shell
-dune exec ./main.exe all | grep "Passed"
+dune exec ./main.exe test_progs
 ```
 
 See one result:
 
 ```shell
-dune exec ./main.exe test_progs__verifier_and
+dune exec ./main.exe test_progs/verifier_and
 ```
 
 ## Debug (using utop)

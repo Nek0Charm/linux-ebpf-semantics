@@ -195,10 +195,14 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
               else
                 let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
                   match next_st with
-                  | Stuck => false
-                  | Next rs_after stk_after code_id tail_call_cnt m_after =>
+                  | Stuck =>
                     match trace with
                     | [] => debug_fail_common "Trace ended before program finished"
+                    | h :: t => debug_fail_exec 1 ofs ins rs rs h addr_map
+                    end
+                  | Next rs_after stk_after code_id tail_call_cnt m_after =>
+                    match trace with
+                    | [] => debug_fail_common "Trace ended before program finished" (* (* The next instruction should be BPF_exit *) bpf_interpreter_trace_check k addr_map init_sp bpf_prog [] next_st *)
                     | h :: t => 
                       if compare_trace_at_pc rs_after h addr_map then
                         bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
@@ -224,7 +228,7 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Definition create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * nat * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * nat * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match jmp_table with
   | [] => (addr_map, m)
   | h1 :: tl =>
@@ -237,12 +241,13 @@ Definition create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 *
       | None => (**should be impossible *) m1
       | Some m' => m'
       end
-    in
-    ({| 
+    in (*
+    let addr_map := {| 
       base_blk := pc_blk1;
-      size_blk := Z.of_nat (8*(List.length jmp_table));
+      size_blk := Z.of_nat (8*(List.length h));
       base_addr := base
-    |} :: addr_map, m2)
+    |} :: addr_map in *)
+      create_jump_table jmp_blk (ofs+8) tl addr_map m2
   end.
 
 Fixpoint create_bpf_maps (bpf_maps: list (nat * int64)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
@@ -314,6 +319,17 @@ Definition semantics_validation (bpf_prog: code)
       base_blk := ctx_blk;
       size_blk := ctx_size;
       base_addr := ctx_ptr
+    |};
+    {| 
+      base_blk := jmp_blk;
+      size_blk := Z.of_nat (8*(List.length jmp_table));
+      base_addr := match jmp_table with
+                    | [] => Int64.zero  (** TODO *) 
+                    | h1 :: _ =>
+                      let (info, h) := h1 in
+                      let (base, index) := info in
+                        base
+                    end
     |} ] in
   let (addr_map5, m5) := create_jump_table jmp_blk 0%Z jmp_table addr_map m4 in
   let (addr_map6, m6) := create_bpf_maps bpf_maps addr_map5 m5 in

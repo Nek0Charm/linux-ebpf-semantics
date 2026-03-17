@@ -161,7 +161,7 @@ let print_addr_map (map: Validation.addr_region list) =
 let print_debug_state reason pc insn rs_before rs_after expected_trace addr_map =
   Printf.printf "\n================= DEBUG DUMP ====================\n";
   Printf.printf "[Trace Check Failed: %s]\n" reason;
-  Printf.printf "  => PC Offset : 0x%LX\n" (int64_of_coq_Z pc);
+  Printf.printf "  => PC Offset : 0x%Ld\n" (int64_of_coq_Z pc);
   Printf.printf "  => Instr     : %s\n\n" (string_of_insn insn);
   
   print_regset "State BEFORE Execution" rs_before;
@@ -204,7 +204,7 @@ let init_hooks () =
     let pc_z = (Obj.magic pc_obj : Validation.z) in
     let insn_z = (Obj.magic insn_obj : Validation.z) in
     Printf.printf "\n[Trace Check Failed: DECODE ERROR]\n";
-    Printf.printf "  => PC Offset : 0x%LX\n" (int64_of_coq_Z pc_z);
+    Printf.printf "  => PC Offset : 0x%Ld\n" (int64_of_coq_Z pc_z);
     Printf.printf "  => Raw Instr : 0x%016Lx\n" (int64_of_coq_Z insn_z);
     false
   );
@@ -212,6 +212,6 @@ let init_hooks () =
   Debug_hooks.fail_decode_oob_hook := (fun pc_obj -> 
     let pc_z = (Obj.magic pc_obj : Validation.z) in
     Printf.printf "\n[Trace Check Failed: PC OUT OF BOUNDS]\n";
-    Printf.printf "  => PC Offset : 0x%LX\n" (int64_of_coq_Z pc_z);
+    Printf.printf "  => PC Offset : 0x%Ld\n" (int64_of_coq_Z pc_z);
     false
   )
