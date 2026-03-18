@@ -175,7 +175,8 @@ let run_test filename verbose =
   end else begin
     Printf.printf "[%s] Passed: %d / %d\n" filename !passed_count total_progs;
     flush stdout
-  end
+  end;
+  (!passed_count, total_progs)
 
 let () =
   if not !Sys.interactive then begin
@@ -199,17 +200,22 @@ let () =
           Printf.printf "Starting batch validation for %d programs in %s...\n\n" 
             (List.length test_names) dir_path;
             
+          let total_passed = ref 0 in
+          let total_cases = ref 0 in
+          
           (* 3. 逐个执行 run_test，路径拼接为 "test_progs/文件名" *)
           List.iter (fun name -> 
-            run_test (Printf.sprintf "%s/%s" arg name) false
+            let (p, c) = run_test (Printf.sprintf "%s/%s" arg name) false in
+            total_passed := !total_passed + p;
+            total_cases := !total_cases + c
           ) test_names;
           
-          Printf.printf "\nBatch validation for %s finished.\n" arg
+          Printf.printf "\nBatch validation for %s finished. Total Passed: %d / %d\n" arg !total_passed !total_cases
         with
         | Sys_error msg -> Printf.printf "Error accessing directory: %s\n" msg
         | e -> Printf.printf "An unexpected error occurred: %s\n" (Printexc.to_string e)
       end else begin
         (* 如果不是 test_progs，则视为单个文件名执行 *)
-        run_test arg true
+        let _ = run_test arg true in ()
       end
   end
