@@ -248,7 +248,7 @@ Inductive instruction : Type :=
 Definition code := list int64 (*instruction *).
 Record ebpf_prog := {
   main_code: code;
-  jump_table: list code;
+  jump_table: nat -> option code;
   max_entries: Z;
 }.
 

@@ -534,7 +534,7 @@ Definition loadsx (k: sizeOp) (addr:val) (m: mem) :=
   match k with
   | Byte      => Mem.loadv Mint8signed m addr
   | HalfWord  => Mem.loadv Mint16signed m addr
-  | Word      => Mem.loadv Many32 m addr
+  | Word      => Mem.loadv Mint32 m addr
   | DBWord    => None
   (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
   end.
@@ -555,7 +555,7 @@ Definition loadsx_probe (k: sizeOp) (addr:val) (m: mem) :=
   match k with
   | Byte      => match Mem.loadv Mint8signed m addr with | None => Some Vzero | Some v => Some v end
   | HalfWord  => match Mem.loadv Mint16signed m addr with | None => Some Vzero | Some v => Some v end
-  | Word      => match Mem.loadv Many32 m addr with | None => Some Vzero | Some v => Some v end
+  | Word      => match Mem.loadv Mint32 m addr with | None => Some Vzero | Some v => Some v end
   | DBWord    => None
   (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
   end.
@@ -904,7 +904,7 @@ Inductive step (addr_map: list addr_region) (p: ebpf_prog): tls_state -> etrace 
       forall c idx b ofs i rs stk code_id tail_call_cnt m rs' stk' code_id' tail_call_cnt' m' et,
       rs PC = Vptr b ofs ->
       (code_id = None -> c = (main_code p)) ->
-      (code_id = Some idx -> List.nth_error (jump_table p) idx = Some c) ->
+      (code_id = Some idx -> (jump_table p) idx = Some c) ->
       find_instr (Ptrofs.unsigned ofs) c = Some i ->
       exec_instr p i rs stk code_id tail_call_cnt m addr_map = Next rs' stk' code_id' tail_call_cnt' m' ->
       exec_instr_event i = et ->
@@ -913,7 +913,7 @@ Inductive step (addr_map: list addr_region) (p: ebpf_prog): tls_state -> etrace 
       forall c idx b ofs cty i res rs stk code_id tail_call_cnt m rs' code_id' tail_call_cnt' m',
       rs PC = Vptr b ofs ->
       (code_id = None -> c = (main_code p)) ->
-      (code_id = Some idx -> List.nth_error (jump_table p) idx = Some c) ->
+      (code_id = Some idx -> (jump_table p) idx = Some c) ->
       find_instr (Ptrofs.unsigned ofs) c = Some (Pcall cty i) ->
       cty = CallByBTF \/ cty = CallByStaticID ->
       ebpf_call_function i rs#R1 rs#R2 rs#R3 rs#R4 rs#R5 (Next rs stk code_id tail_call_cnt m) = Some (res, m') -> (**r an ebpf call may invoke another ebpf program that modifies the global memory *)
@@ -976,7 +976,7 @@ Definition is_final_state (stk_blk: block) (rs: regset) (m: mem) (stk : cstk): b
 Definition find_code (code_id:option nat) (bpf_prog: ebpf_prog): option code :=
   match code_id with
   | None => Some (main_code bpf_prog)
-  | Some idx => List.nth_error (jump_table bpf_prog) idx
+  | Some idx => (jump_table bpf_prog) idx
   end.
 
 Fixpoint bpf_interpreter_old (fuel: nat) (bpf_prog: ebpf_prog) (st: outcome) (addr_map: list addr_region) (stk_blk: block): option val :=
@@ -1078,7 +1078,7 @@ Inductive atomic_step (p: ebpf_prog): tls_state -> etrace -> tls_state -> Prop :
       forall c idx b ofs rs stk code_id tail_call_cnt m rs' stk' code_id' tail_call_cnt' m' et aty w dst src o,
       rs PC = Vptr b ofs ->
       (code_id = None -> c = (main_code p)) ->
-      (code_id = Some idx -> List.nth_error (jump_table p) idx = Some c) ->
+      (code_id = Some idx -> (jump_table p) idx = Some c) ->
       find_instr (Ptrofs.unsigned ofs) c = Some (Patomic aty dst src o) ->
       exec_atomic w aty dst src o rs stk code_id tail_call_cnt m = Next rs' stk' code_id' tail_call_cnt' m' ->
       exec_atomic_instr_event aty = et ->

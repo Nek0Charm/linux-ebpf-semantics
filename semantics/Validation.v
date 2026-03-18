@@ -228,7 +228,7 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (Z * int64 * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Fixpoint create_jump_table (jmp_blk: block) (jmp_table: list (Z * int64 * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match jmp_table with
   | [] => (addr_map, m)
   | h1 :: tl =>
@@ -237,17 +237,17 @@ Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (Z * int64
   (* we don't need to store the bytecode into memory as we directly access bpf_prog *)
     let (m1, pc_blk1) := Mem.alloc m 0 (Z.of_nat (8*(List.length h))) in
     let m2 :=
-      match Mem.storev Mint64 m1 (Vptr jmp_blk (Ptrofs.repr ofs)) (Vptr pc_blk1 Ptrofs.zero) with
+      match Mem.storev Mint64 m1 (Vptr jmp_blk (Ptrofs.repr (8*index))) (Vptr pc_blk1 Ptrofs.zero) with
       | None => (**should be impossible *) m1
       | Some m' => m'
       end
-    in (*
+    in
     let addr_map := {| 
       base_blk := pc_blk1;
       size_blk := Z.of_nat (8*(List.length h));
       base_addr := target
-    |} :: addr_map in *)
-      create_jump_table jmp_blk (ofs+8) tl addr_map m2
+    |} :: addr_map in
+      create_jump_table jmp_blk tl addr_map m2
   end.
 
 Fixpoint create_bpf_maps (bpf_maps: list (Z * int64)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
@@ -285,6 +285,15 @@ Fixpoint create_addr_map_sp (stk_blk: block) (sp_list: list int64) (addr_map: li
       create_addr_map_sp stk_blk' tl addr_map' m'
   end.
 
+
+Fixpoint user_jmp_table2formal (jmp_table: list (Z * int64 * code)) : nat -> option code :=
+  match jmp_table with
+  | [] => fun _ => None
+  | h :: t =>
+    fun i => if Nat.eqb i (Z.to_nat (fst (fst h))) then Some (snd h)
+    else  (user_jmp_table2formal t) i
+  end.
+
 Definition semantics_validation (bpf_prog: code)
                                 (ctx_ptr: int64)
                                 (bpf_maps: list (Z * int64))
@@ -306,7 +315,7 @@ Definition semantics_validation (bpf_prog: code)
     jmp_blk points to the jump_table used by tail_call functions: where
     - [i:i+7] stores a point to the jump_table[i]
   *)
-  let (m4, jmp_blk) := Mem.alloc m3 0 (Z.of_nat (8*(List.length (snd jmp_table)))) in
+  let (m4, jmp_blk) := Mem.alloc m3 0 (Z.of_nat (8*33)) (** TODO:  *) in
 
   (** addr_map: *)
   let addr_map := [
@@ -322,10 +331,10 @@ Definition semantics_validation (bpf_prog: code)
     |};
     {| 
       base_blk := jmp_blk;
-      size_blk := Z.of_nat (8*(List.length (snd jmp_table)));
+      size_blk := Z.of_nat (8*33); (** TODO:  *) 
       base_addr := fst jmp_table
     |} ] in
-  let (addr_map5, m5) := create_jump_table jmp_blk 0%Z (snd jmp_table) addr_map m4 in
+  let (addr_map5, m5) := create_jump_table jmp_blk (snd jmp_table) addr_map m4 in
   let (addr_map6, m6) := create_bpf_maps bpf_maps addr_map5 m5 in
 
   let (addr_map', m') := create_addr_map_sp stk_blk sp_list addr_map6 m6 in
@@ -337,6 +346,6 @@ Definition semantics_validation (bpf_prog: code)
 
     bpf_interpreter_trace_check fuel addr_map' r10_base 
           {|  main_code := bpf_prog;
-              jump_table := List.map (fun x => snd x) (snd jmp_table);
+              jump_table := user_jmp_table2formal (snd jmp_table);
               max_entries := jmp_table_max |}
           trace init_st.
