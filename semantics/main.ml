@@ -181,8 +181,8 @@ let () =
       Printf.printf "Usage: %s <trace_filename | test_progs>\n" Sys.argv.(0)
     else
       let arg = Sys.argv.(1) in
-      if arg = "test_progs" then begin
-        let dir_path = "../trace/test_progs/" in
+      if arg = "test_progs" || arg = "test_bpf" then begin
+        let dir_path = "../trace/" ^ arg ^ "/" in
         try
           (* 1. 获取目录下所有文件 *)
           let files = Sys.readdir dir_path in
@@ -199,10 +199,10 @@ let () =
             
           (* 3. 逐个执行 run_test，路径拼接为 "test_progs/文件名" *)
           List.iter (fun name -> 
-            run_test (Printf.sprintf "test_progs/%s" name) false
+            run_test (Printf.sprintf "%s/%s" arg name) false
           ) test_names;
           
-          Printf.printf "\nBatch validation for test_progs finished.\n"
+          Printf.printf "\nBatch validation for %s finished.\n" arg
         with
         | Sys_error msg -> Printf.printf "Error accessing directory: %s\n" msg
         | e -> Printf.printf "An unexpected error occurred: %s\n" (Printexc.to_string e)
