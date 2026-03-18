@@ -427,7 +427,7 @@ Definition eval_cmp64 (op: cmpOp) (rs: regset) (m: mem) (r: ireg) (ri: ireg+imm)
     | LT Unsigned => Val.cmplu_bool (Mem.valid_pointer m) Clt dst src
     | LE Signed   => Val.cmpl_bool Cle dst src
     | LE Unsigned => Val.cmplu_bool (Mem.valid_pointer m) Cle dst src
-    | SET         => Val.cmplu_bool (Mem.valid_pointer m) Cne (Val.and dst src) (Vint Int.zero)
+    | SET         => Val.cmplu_bool (Mem.valid_pointer m) Cne (Val.andl dst src) (Vlong Int64.zero)
     | NE          => Val.cmplu_bool (Mem.valid_pointer m) Cne dst src
     end.
 
