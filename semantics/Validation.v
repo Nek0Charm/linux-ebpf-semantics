@@ -150,15 +150,15 @@ Definition compare_trace_at_pc (rs: regset) (trace: list int64) (addr_map: list 
 Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (init_sp: int64)  
   (bpf_prog: ebpf_prog) (trace: list (list int64)) (st: outcome): bool :=
   match fuel with
-  | O => false (* assume we have fenouagh fuell *)
+  | O => debug_fail_common "Fuel exhausted" (* assume we have fenouagh fuell *)
   | S k =>
     match st with
-    | Stuck => false
+    | Stuck => debug_fail_common "Stuck from start"
     | Next rs stk code_id tail_call_cnt m =>
       match rs PC with
       | Vptr b ofs =>
         match find_code code_id bpf_prog with
-        | None => false
+        | None => debug_fail_common "find_code failed"
         | Some c =>
           match find_instr (Ptrofs.unsigned ofs) c with
           | None =>
@@ -173,11 +173,11 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
             | Pcall CallByBTF i =>
             (** simulating external functions *)
               match trace with
-              | [] => false
+              | [] => debug_fail_common "Trace ended before program finished"
               | h :: t =>
                 (* Here we get R0 from current state *)
                 match List.nth_error h 0%nat with
-                | None => false
+                | None => debug_fail_common "No R0 found in trace"
                 | Some r0 =>
                 (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
                   bpf_interpreter_trace_check k addr_map init_sp bpf_prog t
@@ -190,7 +190,7 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                 | [] => true
                  (*| [h] => if compare_final_state rs h addr_map then true
                          else debug_fail_exec 2 ofs ins rs (Pregmap.init (Vlong Int64.zero)) h addr_map *)
-                | _ => false
+                | _ => debug_fail_common "Program finished before trace ended"
                 end
               else
                 let next_st := exec_instr bpf_prog ins rs stk code_id tail_call_cnt m addr_map in
@@ -213,7 +213,7 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
             end
           end
         end
-      | _ => false
+      | _ => debug_fail_common "PC is not a pointer"
       end
     end
   end.
@@ -228,12 +228,12 @@ Definition create_initial_state (ctx stk pc: block): regset :=
     (* # BP  <- Vnullptr *)
 .
 
-Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * Z * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
+Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (Z * int64 * code)) (addr_map: list addr_region) (m: mem): (list addr_region) * mem :=
   match jmp_table with
   | [] => (addr_map, m)
   | h1 :: tl =>
     let (info, h) := h1 in
-      let (base, index) := info in
+      let (index, target) := info in
   (* we don't need to store the bytecode into memory as we directly access bpf_prog *)
     let (m1, pc_blk1) := Mem.alloc m 0 (Z.of_nat (8*(List.length h))) in
     let m2 :=
@@ -245,7 +245,7 @@ Fixpoint create_jump_table (jmp_blk: block) (ofs: Z) (jmp_table: list (int64 * Z
     let addr_map := {| 
       base_blk := pc_blk1;
       size_blk := Z.of_nat (8*(List.length h));
-      base_addr := base
+      base_addr := target
     |} :: addr_map in *)
       create_jump_table jmp_blk (ofs+8) tl addr_map m2
   end.
@@ -290,7 +290,7 @@ Definition semantics_validation (bpf_prog: code)
                                 (bpf_maps: list (Z * int64))
                                 (trace: list (list int64))
                                 (jmp_table_max: Z)
-                                (jmp_table: list (int64 * Z * code))
+                                (jmp_table: int64 * list (Z * int64 * code))
                                 (sp_list: list int64) : bool :=
   (** assume some information, only for testing *)
   let fuel := 1000 %nat in (* fixed fuel *)
@@ -306,7 +306,7 @@ Definition semantics_validation (bpf_prog: code)
     jmp_blk points to the jump_table used by tail_call functions: where
     - [i:i+7] stores a point to the jump_table[i]
   *)
-  let (m4, jmp_blk) := Mem.alloc m3 0 (Z.of_nat (8*(List.length jmp_table))) in
+  let (m4, jmp_blk) := Mem.alloc m3 0 (Z.of_nat (8*(List.length (snd jmp_table)))) in
 
   (** addr_map: *)
   let addr_map := [
@@ -322,16 +322,10 @@ Definition semantics_validation (bpf_prog: code)
     |};
     {| 
       base_blk := jmp_blk;
-      size_blk := Z.of_nat (8*(List.length jmp_table));
-      base_addr := match jmp_table with
-                    | [] => Int64.zero  (** TODO *) 
-                    | h1 :: _ =>
-                      let (info, h) := h1 in
-                      let (base, index) := info in
-                        base
-                    end
+      size_blk := Z.of_nat (8*(List.length (snd jmp_table)));
+      base_addr := fst jmp_table
     |} ] in
-  let (addr_map5, m5) := create_jump_table jmp_blk 0%Z jmp_table addr_map m4 in
+  let (addr_map5, m5) := create_jump_table jmp_blk 0%Z (snd jmp_table) addr_map m4 in
   let (addr_map6, m6) := create_bpf_maps bpf_maps addr_map5 m5 in
 
   let (addr_map', m') := create_addr_map_sp stk_blk sp_list addr_map6 m6 in
@@ -343,6 +337,6 @@ Definition semantics_validation (bpf_prog: code)
 
     bpf_interpreter_trace_check fuel addr_map' r10_base 
           {|  main_code := bpf_prog;
-              jump_table := List.map (fun x => snd x) jmp_table;
+              jump_table := List.map (fun x => snd x) (snd jmp_table);
               max_entries := jmp_table_max |}
           trace init_st.

@@ -33,12 +33,12 @@ let cast_mem_blocks l =
     (coq_Z_of_int size, compcert_int64_of_native addr)
   ) l
 
-(* 转换 jmp_table: (pc, map_ptr, index, target, insns) -> ((int64 * nat) * list int64) *)
-let cast_jmp_table l =
-  List.map (fun (map_ptr, index, insns) ->
-    (* 关键点：insns 本身是列表，需使用 cast_list 而非 compcert_int64_of_native *)
-    ((compcert_int64_of_native map_ptr, coq_Z_of_int index), cast_list insns)
-  ) l
+(* 转换 jmp_table: (map_ptr, [(index, target, insns)]) -> (int64, ((nat * int64) * list int64) list) *)
+let cast_jmp_table (map_ptr, l) =
+  (compcert_int64_of_native map_ptr,
+  List.map (fun (index, target, insns) ->
+    ((coq_Z_of_int index, compcert_int64_of_native target), cast_list insns)
+  ) l)
 
 (* ========================================== *)
 (* 2. JSON Parser *)
@@ -68,10 +68,10 @@ let parse_mem_block node =
 
 (* 解析跳转表条目 *)
 let parse_jmp_entry node =
-  let map_ptr = node |> member "map_ptr" |> parse_uint64 in
   let index = node |> member "index" |> to_int in
+  let target = node |> member "target" |> parse_uint64 in
   let insns = node |> member "insns" |> to_list |> List.map parse_uint64 in
-  (map_ptr, index, insns)
+  (index, target, insns)
 
 let parse_single_program prog_node =
   let prog_name = prog_node |> member "prog_name" |> to_string in
@@ -101,15 +101,17 @@ let parse_single_program prog_node =
     prog_node |> member "mem_blocks" |> to_list |> List.map parse_mem_block 
   in
   
-  let jmp_table_cnt =
-    prog_node |> member "jmp_table_cnt" |> to_int
+  let jmp_max_entries =
+    prog_node |> member "jmp_max_entries" |> to_int
   in
 
-  let jmp_table = 
+  let jmp_table = (
+    prog_node |> member "jmp_map_ptr" |> parse_uint64,
     prog_node |> member "jmp_table" |> to_list |> List.map parse_jmp_entry 
+  )
   in
   
-  (prog_name, prog_insn, trace, sp_list, ctx_ptr, mem_blocks, jmp_table_cnt, jmp_table)
+  (prog_name, prog_insn, trace, sp_list, ctx_ptr, mem_blocks, jmp_max_entries, jmp_table)
 
 let load_traces_from_json filename =
   let path = Printf.sprintf "../trace/%s.json" filename in
@@ -131,7 +133,7 @@ let run_test filename verbose =
   
   let passed_count = ref 0 in
 
-  List.iteri (fun i (prog_name, prog_mock, trace_mock, sp_list, ctx_ptr, mem_blocks, jmp_table_cnt, jmp_table) ->
+  List.iteri (fun i (prog_name, prog_mock, trace_mock, sp_list, ctx_ptr, mem_blocks, jmp_max_entries, jmp_table) ->
     if verbose then begin
       Printf.printf "=================================================\n";
       Printf.printf "Validating Program [%d]: %s\n" (i + 1) prog_name;
@@ -153,7 +155,7 @@ let run_test filename verbose =
                     (compcert_int64_of_native ctx_ptr)
                     (cast_mem_blocks mem_blocks)
                     (cast_trace trace_mock)
-                    (coq_Z_of_int jmp_table_cnt)
+                    (coq_Z_of_int jmp_max_entries)
                     (cast_jmp_table jmp_table)
                     (cast_list sp_list)
                     
