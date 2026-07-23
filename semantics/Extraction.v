@@ -21,4 +21,4 @@ Extract Constant debug_fail_exec => "Debug_hooks.fail_exec".
 Extract Constant debug_fail_decode => "Debug_hooks.fail_decode".
 Extract Constant debug_fail_decode_oob => "Debug_hooks.fail_decode_oob".
 
-Extraction "ebpf/validation.ml" semantics_validation.
+Extraction "semantics/validation.ml" semantics_validation.

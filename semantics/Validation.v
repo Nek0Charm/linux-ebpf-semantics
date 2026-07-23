@@ -302,7 +302,7 @@ Definition semantics_validation (bpf_prog: code)
                                 (jmp_table: int64 * list (Z * int64 * code))
                                 (sp_list: list int64) : bool :=
   (** assume some information, only for testing *)
-  let fuel := 1000 %nat in (* fixed fuel *)
+  let fuel := 10000 %nat in (* fixed fuel *)
   let ctx_size := 1000 %Z in (* fixed context memort size *)
 
   (** initial_mem *)

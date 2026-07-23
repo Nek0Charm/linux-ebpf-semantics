@@ -4,7 +4,7 @@
 
 ```shell
 make
-cd ebpf
+cd semantics
 dune build
 ```
 
@@ -22,7 +22,7 @@ dune exec ./main.exe test_progs/verifier_and
 
 ## Debug (using utop)
 
-Change last line in `.ebpf/.ocamlinit` .
+Change the last line in `semantics/.ocamlinit`.
 
 ```ocaml
 #trace Validation.exec_instr;; (* change to some function you want to trace *)
