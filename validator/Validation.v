@@ -3,7 +3,7 @@ From Coq Require Import ZArith List String.
 From compcert Require Import Coqlib Ctypes AST Integers.
 From compcert Require Import Maps Values Memory.
 
-From bpf.ebpf Require Import ebpfSyntax ebpfState ebpfDecoder ebpfBinSem.
+From bpf.semantics Require Import ebpfSyntax ebpfState ebpfDecoder ebpfBinSem.
 
 Import ListNotations.
 

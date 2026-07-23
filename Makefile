@@ -2,12 +2,14 @@ COQC := coqc
 COQMAKEFILE := coq_makefile
 COQEXTRAFLAGS := COQEXTRAFLAGS = '-w all,-extraction,-disj-pattern-notation'
 
-COQDIR := semantics
-COQINCLUDES := -R $(COQDIR) bpf.ebpf
+COQDIRS := theories validator
+GENERATED_DIR := validator
+VALIDATOR_DIR := validator
+COQINCLUDES := -R theories bpf.semantics -R validator bpf.validator
 
-COQFILES := $(sort $(wildcard $(COQDIR)/*.v))
+COQFILES := $(sort $(foreach d,$(COQDIRS),$(wildcard $(d)/*.v)))
 
-COQFILES_FILTERED := $(filter-out $(COQDIR)/Validation.v $(COQDIR)/Extraction.v,$(COQFILES))
+COQFILES_FILTERED := $(filter-out $(VALIDATOR_DIR)/Validation.v $(VALIDATOR_DIR)/Extraction.v,$(COQFILES))
 
 .PHONY: all clean distclean bpfcode validation validation1 validation2 validationcode
 
@@ -25,6 +27,7 @@ CoqMakefile: _CoqProject $(COQFILES) Makefile
 clean:
 	@echo "Cleaning build artifacts..."
 	@if [ -f CoqMakefile ]; then make -f CoqMakefile clean; fi
+	@if command -v dune >/dev/null 2>&1; then dune clean; fi
 	@rm -f _CoqProject CoqMakefile CoqMakefile.conf
 	@find . \( \
 		-name "*.vo" -o \
@@ -36,22 +39,22 @@ clean:
 		-name "*.cmx" -o \
 		-name "*.crashcoqide" \
 	\) -exec rm -f {} +
-	@rm -f $(COQDIR)/validation.ml $(COQDIR)/validation.mli
+	@rm -f $(GENERATED_DIR)/validation.ml $(GENERATED_DIR)/validation.mli
 
 bpfcode:
 	coqwc $(COQFILES_FILTERED)
 
 validationcode:
-	cloc $(COQDIR)/main.ml
+	cloc $(VALIDATOR_DIR)/main.ml
 
 validation: all
-	cd $(COQDIR) && dune build
+	dune build
 
 validation1: all
-	cd $(COQDIR) && dune exec ./main.exe test_progs
+	dune exec validator/main.exe -- --trace-root trace test_progs
 
 validation2: all
-	cd $(COQDIR) && dune exec ./main.exe test_bpf
+	dune exec validator/main.exe -- --trace-root trace test_bpf
 
 distclean: clean
 	@echo "Removing build system files..."

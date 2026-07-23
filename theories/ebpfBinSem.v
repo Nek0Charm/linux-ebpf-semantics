@@ -11,7 +11,7 @@ From compcert Require Import Conventions Events Smallstep.
 From compcert Require Stacklayout.
 From compcert Require Import Op.
 
-From bpf.ebpf Require Import GlobalSem ebpfSyntax ebpfState.
+From bpf.semantics Require Import GlobalSem ebpfSyntax ebpfState.
 
 Import ListNotations.
 

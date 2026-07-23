@@ -1,0 +1,28 @@
+(env
+ (dev
+  (flags (:standard -w -67)))
+ (release
+  (flags (:standard -w -67))))
+
+(library
+ (name debug_hooks_lib)
+ (wrapped false)
+ (modules debug_hooks))
+
+(library
+ (name bpf_core)
+ (wrapped false)
+ (modules validation)
+ (libraries debug_hooks_lib zarith))
+
+(library
+ (name debug_printer_lib)
+ (wrapped false)
+ (modules debug_printer)
+ (libraries bpf_core))
+
+(executable
+ (name main)
+ (modules main)
+ (libraries bpf_core debug_printer_lib zarith yojson)
+ (modes byte exe))

@@ -1,6 +1,6 @@
 From Coq Require Import List String ListSet.
 
-From bpf.ebpf Require Import Nondeterminism.
+From bpf.semantics Require Import Nondeterminism.
 Import ListNotations.
 Open Scope string_scope.
 

@@ -113,8 +113,8 @@ let parse_single_program prog_node =
   
   (prog_name, prog_insn, trace, sp_list, ctx_ptr, mem_blocks, jmp_max_entries, jmp_table)
 
-let load_traces_from_json filename =
-  let path = Printf.sprintf "../trace/%s.json" filename in
+let load_traces_from_json trace_root filename =
+  let path = Filename.concat trace_root (filename ^ ".json") in
   let json = Yojson.Safe.from_file path in
   json |> to_list |> List.map parse_single_program
 
@@ -122,11 +122,11 @@ let load_traces_from_json filename =
 (* 3. Main Testing Program *)
 (* ========================================== *)
 
-let run_test filename verbose =
+let run_test trace_root filename verbose =
   Debug_printer.init_hooks verbose;
   if verbose then Printf.printf "Loading JSON traces from %s...\n" filename;
   
-  let programs = load_traces_from_json filename in
+  let programs = load_traces_from_json trace_root filename in
   let total_progs = List.length programs in
   
   if verbose then Printf.printf "[Info] Successfully loaded %d programs.\n\n" total_progs;
@@ -178,14 +178,32 @@ let run_test filename verbose =
   end;
   (!passed_count, total_progs)
 
+let parse_cli () =
+  let trace_root = ref "trace" in
+  let target = ref None in
+  let set_target value =
+    match !target with
+    | None -> target := Some value
+    | Some _ -> raise (Arg.Bad "only one trace target may be specified")
+  in
+  let options = [
+    ("--trace-root", Arg.Set_string trace_root,
+      "DIR directory containing test_progs/ and test_bpf/")
+  ] in
+  let usage =
+    Printf.sprintf "Usage: %s [--trace-root DIR] <trace_filename | test_progs | test_bpf>"
+      Sys.argv.(0)
+  in
+  Arg.parse options set_target usage;
+  match !target with
+  | Some value -> (!trace_root, value)
+  | None -> raise (Arg.Bad "a trace target is required")
+
 let () =
   if not !Sys.interactive then begin
-    if Array.length Sys.argv < 2 then
-      Printf.printf "Usage: %s <trace_filename | test_progs>\n" Sys.argv.(0)
-    else
-      let arg = Sys.argv.(1) in
+      let trace_root, arg = parse_cli () in
       if arg = "test_progs" || arg = "test_bpf" then begin
-        let dir_path = "../trace/" ^ arg ^ "/" in
+        let dir_path = Filename.concat trace_root arg in
         try
           (* 1. 获取目录下所有文件 *)
           let files = Sys.readdir dir_path in
@@ -205,7 +223,9 @@ let () =
           
           (* 3. 逐个执行 run_test，路径拼接为 "test_progs/文件名" *)
           List.iter (fun name -> 
-            let (p, c) = run_test (Printf.sprintf "%s/%s" arg name) false in
+            let (p, c) =
+              run_test trace_root (Filename.concat arg name) false
+            in
             total_passed := !total_passed + p;
             total_cases := !total_cases + c
           ) test_names;
@@ -216,6 +236,6 @@ let () =
         | e -> Printf.printf "An unexpected error occurred: %s\n" (Printexc.to_string e)
       end else begin
         (* 如果不是 test_progs，则视为单个文件名执行 *)
-        let _ = run_test arg true in ()
+        let _ = run_test trace_root arg true in ()
       end
   end

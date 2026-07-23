@@ -53,5 +53,5 @@ setup.log
 # Local OPAM switch
 _opam/
 
-validation.mli
-validation.ml
+/validator/validation.mli
+/validator/validation.ml
