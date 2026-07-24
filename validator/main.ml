@@ -27,13 +27,15 @@ let cast_trace t = List.map cast_list t
 let coq_Z_of_int n =
   coq_Z_of_int64 (Stdlib.Int64.of_int n)
 
-(* 转换 mem_block: (addr, size, ty) -> (nat * int64) *)
+(* Convert mem_block: (addr, size, ty) -> (nat * int64). *)
 let cast_mem_blocks l =
   List.map (fun (size, addr) -> 
     (coq_Z_of_int size, compcert_int64_of_native addr)
   ) l
 
-(* 转换 jmp_table: (map_ptr, [(index, target, insns)]) -> (int64, ((nat * int64) * list int64) list) *)
+(* Convert jmp_table:
+   (map_ptr, [(index, target, insns)])
+   -> (int64, ((nat * int64) * list int64) list). *)
 let cast_jmp_table (map_ptr, l) =
   (compcert_int64_of_native map_ptr,
   List.map (fun (index, target, insns) ->
@@ -60,13 +62,13 @@ let parse_uint64 json_node =
   | `String s -> z_to_int64 (Zarith.of_string s)
   | _ -> failwith "Invalid number format in JSON"
 
-(* 解析内存块对象 *)
+(* Parse a memory-block object. *)
 let parse_mem_block node =
   let base_addr = node |> member "base_addr" |> parse_uint64 in
   let size = node |> member "size" |> to_int in
   (size, base_addr)
 
-(* 解析跳转表条目 *)
+(* Parse a jump-table entry. *)
 let parse_jmp_entry node =
   let index = node |> member "index" |> to_int in
   let target = node |> member "target" |> parse_uint64 in
@@ -76,12 +78,12 @@ let parse_jmp_entry node =
 let parse_single_program prog_node =
   let prog_name = prog_node |> member "prog_name" |> to_string in
   
-  (* 对应新的字段名 "prog_insn" *)
+  (* Use the new "prog_insn" field name. *)
   let prog_insn = 
     prog_node |> member "prog_insn" |> to_list |> List.map parse_uint64 
   in
   
-  (* 对应新的 Trace 结构：直接是 string list list *)
+  (* The new trace representation is a string list list. *)
   let trace_nodes = prog_node |> member "trace" |> to_list in
   let trace = 
     List.map (fun t_node ->
@@ -205,9 +207,9 @@ let () =
       if arg = "test_progs" || arg = "test_bpf" then begin
         let dir_path = Filename.concat trace_root arg in
         try
-          (* 1. 获取目录下所有文件 *)
+          (* 1. Read every file in the directory. *)
           let files = Sys.readdir dir_path in
-          (* 2. 过滤出 .json 文件并去掉后缀，然后排序 *)
+          (* 2. Keep .json files, remove the suffix, and sort them. *)
           let test_names = 
             Array.to_list files
             |> List.filter (fun f -> Filename.check_suffix f ".json")
@@ -221,7 +223,7 @@ let () =
           let total_passed = ref 0 in
           let total_cases = ref 0 in
           
-          (* 3. 逐个执行 run_test，路径拼接为 "test_progs/文件名" *)
+          (* 3. Run each test with a path such as "test_progs/filename". *)
           List.iter (fun name -> 
             let (p, c) =
               run_test trace_root (Filename.concat arg name) false
@@ -235,7 +237,7 @@ let () =
         | Sys_error msg -> Printf.printf "Error accessing directory: %s\n" msg
         | e -> Printf.printf "An unexpected error occurred: %s\n" (Printexc.to_string e)
       end else begin
-        (* 如果不是 test_progs，则视为单个文件名执行 *)
+        (* Otherwise, treat the argument as a single trace filename. *)
         let _ = run_test trace_root arg true in ()
       end
   end
