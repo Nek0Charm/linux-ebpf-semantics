@@ -316,13 +316,15 @@ Definition eval_end_trunction (s: endSize) (v: int64) : int64 :=
   end.
 
 Definition eval_end (e:endOp) (s: endSize) (v: val) : val :=
-  match v with
-  | Vlong vl => Vlong
+  let eval (vl: int64) :=
     match e with
     | LE32 => if Archi.big_endian then (swapn s) vl else eval_end_trunction s vl
     | BE32 => if Archi.big_endian then eval_end_trunction s vl else (swapn s) vl
     | LE64 => (swapn s) vl
-    end
+    end in
+  match v with
+  | Vlong vl => Vlong (eval vl)
+  | Vint vi => Vlong (eval (Int64.repr (Int.unsigned vi)))
   | _ => Vundef
   end.
 
