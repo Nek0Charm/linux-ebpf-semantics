@@ -798,13 +798,14 @@ Definition exec_tail_call (p: ebpf_prog) (rs: regset) (c_stk: cstk) (code_id: op
         then
           Next (nextinstr rs) c_stk code_id tail_call_cnt m
         else
+          let next_tail_call_cnt := (tail_call_cnt + 1)%nat in
           match Mem.loadv Mint64 m (Val.offset_ptr r2_ptr (Ptrofs.of_int64u (Int64.mul index (Int64.repr 8%Z)))) with
-          | None => Next (nextinstr rs) c_stk code_id tail_call_cnt m
+          | None => Next (nextinstr rs) c_stk code_id next_tail_call_cnt m
           | Some res =>
             match res with
             | Vptr b' ofs' =>
-              Next (rs#PC <- res) c_stk (Some (Z.to_nat (Int64.unsigned index))) (tail_call_cnt+1) m
-            | _ => Next (nextinstr rs) c_stk code_id tail_call_cnt m
+              Next (rs#PC <- res) c_stk (Some (Z.to_nat (Int64.unsigned index))) next_tail_call_cnt m
+            | _ => Next (nextinstr rs) c_stk code_id next_tail_call_cnt m
             end
           end
       | _ => Stuck
