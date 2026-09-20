@@ -376,7 +376,17 @@ Definition eval_alu64 (op: aluOp) (dst: val) (v2: val+int) : val :=
 
 Definition exec_alu (op: aluOp) (w:width) (r: ireg) (ri: ireg+int) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) :=
   let alu_f := match w with | W32 => eval_alu32 | W64 => eval_alu64 end in
-  let v := alu_f op (rs#r) (map_sum_left (fun (x:ireg) => rs#x) ri) in
+  let v :=
+    match ri with
+    | inl src =>
+      if ireg_eqb r src then
+        match op with
+        | SUB | XOR => Vlong Int64.zero
+        | _ => alu_f op (rs#r) (inl (rs#src))
+        end
+      else alu_f op (rs#r) (inl (rs#src))
+    | inr i => alu_f op (rs#r) (inr i)
+    end in
     Next (nextinstr (rs#r <- v)) c_stk code_id tail_call_cnt m.
 
 (** RFC9669: 4.3. Jump Instructions
