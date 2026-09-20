@@ -786,22 +786,24 @@ Definition exec_tail_call_addr (r2: val) (addr_map: list addr_region): option va
 Definition exec_tail_call (p: ebpf_prog) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) (addr_map: list addr_region) :=
   match rs R3 with
   | Vlong i =>
+    (* The Linux interpreter converts R3 to u32 before the bounds check and lookup. *)
+    let index := Int64.zero_ext 32 i in
     match exec_tail_call_addr (rs R2) addr_map with
     | None => Stuck
     | Some r2_ptr =>
       match r2_ptr with
       | Vptr b ofs =>
-        if (Z.leb (max_entries p) (Int64.unsigned i)) || 
+        if (Z.leb (max_entries p) (Int64.unsigned index)) ||
             (Nat.leb MAX_TAIL_CALL_CNT tail_call_cnt)
         then
           Next (nextinstr rs) c_stk code_id tail_call_cnt m
         else
-          match Mem.loadv Mint64 m (Val.offset_ptr r2_ptr (Ptrofs.of_int64u (Int64.mul i (Int64.repr 8%Z)))) with
+          match Mem.loadv Mint64 m (Val.offset_ptr r2_ptr (Ptrofs.of_int64u (Int64.mul index (Int64.repr 8%Z)))) with
           | None => Next (nextinstr rs) c_stk code_id tail_call_cnt m
           | Some res =>
             match res with
             | Vptr b' ofs' =>
-              Next (rs#PC <- res) c_stk (Some (Z.to_nat (Int64.unsigned i))) (tail_call_cnt+1) m
+              Next (rs#PC <- res) c_stk (Some (Z.to_nat (Int64.unsigned index))) (tail_call_cnt+1) m
             | _ => Next (nextinstr rs) c_stk code_id tail_call_cnt m
             end
           end
