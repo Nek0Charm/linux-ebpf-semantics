@@ -760,7 +760,7 @@ Definition exec_call_internal (i: imm) (rs: regset) (c_stk: cstk) (code_id: opti
   let (m', nsp) := Mem.alloc m 0 bpf_stack_size in
   Next
     ((def_caller_save_regs rs)
-      #PC <- (Val.offset_ptr (rs PC) (Ptrofs.of_int i))
+      #PC <- (Val.offset_ptr (Val.offset_ptr (rs PC) (Ptrofs.of_int i)) Ptrofs.one)
       #R10 <- (Vptr nsp (Ptrofs.repr bpf_stack_size))) n_stk code_id tail_call_cnt m'.
 
 (*

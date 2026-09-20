@@ -118,6 +118,10 @@ Definition decode_insn (opcode : byte) (dst_reg src_reg : ireg) (off : Ptrofs.in
         if check_src_r0 && check_imm_0 then Some (Pjmp64 off) else None
       else
         if check_src_r0 && check_off_0 then Some (Pjmp32 imm) else None
+    else if Z.eqb code 0xe && is_jmp64 then (* kernel-patched BPF_CALL_ARGS *)
+      if check_dst_r0 && ireg_eqb src_reg R1 then
+        Some (Pcall CallInternal (Int.repr (Ptrofs.signed off)))
+      else None
     else if Z.eqb code 0xf && is_jmp64 then (* JMP_TAIL_CALL *)
       if check_dst_r0 && check_src_r0 && check_off_0 && check_imm_0 then Some Ptail_call else None
     else if Z.eqb code 0x8 && is_jmp64 && src_is_imm then (* CALL *)
