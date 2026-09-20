@@ -541,12 +541,28 @@ Definition cast_i2p (ty: pseudo_ptr_ty) (v: int64) (pc: val) (l_ptr: list int64)
   end. *)
 
 
+Definition loadv_unaligned (chunk: memory_chunk) (m: mem) (addr: val) : option val :=
+  match addr with
+  | Vptr b ofs =>
+    match Mem.loadbytes m b (Ptrofs.unsigned ofs) (size_chunk chunk) with
+    | Some bytes => Some (decode_val chunk bytes)
+    | None => None
+    end
+  | _ => None
+  end.
+
+Definition storev_unaligned (chunk: memory_chunk) (m: mem) (addr v: val) : option mem :=
+  match addr with
+  | Vptr b ofs => Mem.storebytes m b (Ptrofs.unsigned ofs) (encode_val chunk v)
+  | _ => None
+  end.
+
 Definition load (k: sizeOp) (addr:val) (m: mem) :=
   match k with
-  | Byte      => Mem.loadv Mint8unsigned m addr
-  | HalfWord  => Mem.loadv Mint16unsigned m addr
-  | Word      => Mem.loadv Mint32 m addr
-  | DBWord    => Mem.loadv Mint64 m addr
+  | Byte      => loadv_unaligned Mint8unsigned m addr
+  | HalfWord  => loadv_unaligned Mint16unsigned m addr
+  | Word      => loadv_unaligned Mint32 m addr
+  | DBWord    => loadv_unaligned Mint64 m addr
   (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
   end.
 
@@ -580,9 +596,9 @@ Definition exec_load_probe (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: re
 
 Definition loadsx (k: sizeOp) (addr:val) (m: mem) :=
   match k with
-  | Byte      => Mem.loadv Mint8signed m addr
-  | HalfWord  => Mem.loadv Mint16signed m addr
-  | Word      => Mem.loadv Mint32 m addr
+  | Byte      => loadv_unaligned Mint8signed m addr
+  | HalfWord  => loadv_unaligned Mint16signed m addr
+  | Word      => loadv_unaligned Mint32 m addr
   | DBWord    => None
   (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
   end.
@@ -601,9 +617,9 @@ Definition exec_loadsx (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: regset
 
 Definition loadsx_probe (k: sizeOp) (addr:val) (m: mem) :=
   match k with
-  | Byte      => match Mem.loadv Mint8signed m addr with | None => Some Vzero | Some v => Some v end
-  | HalfWord  => match Mem.loadv Mint16signed m addr with | None => Some Vzero | Some v => Some v end
-  | Word      => match Mem.loadv Mint32 m addr with | None => Some Vzero | Some v => Some v end
+  | Byte      => match loadv_unaligned Mint8signed m addr with | None => Some Vzero | Some v => Some v end
+  | HalfWord  => match loadv_unaligned Mint16signed m addr with | None => Some Vzero | Some v => Some v end
+  | Word      => match loadv_unaligned Mint32 m addr with | None => Some Vzero | Some v => Some v end
   | DBWord    => None
   (* if Archi.ptr64 then Mem.loadv Mint64 m addr else None *)
   end.
@@ -616,10 +632,10 @@ Definition exec_loadsx_probe (k: sizeOp) (r:ireg) (r':ireg) (o:Ptrofs.int) (rs: 
 
 Definition store (k: sizeOp) (addr:val) (v:val) (m: mem) :=
   match k with
-  | Byte      => Mem.storev Mint8unsigned m addr v
-  | HalfWord  => Mem.storev Mint16unsigned m addr v
-  | Word      => Mem.storev Mint32 m addr v
-  | DBWord    => Mem.storev Mint64 m addr v
+  | Byte      => storev_unaligned Mint8unsigned m addr v
+  | HalfWord  => storev_unaligned Mint16unsigned m addr v
+  | Word      => storev_unaligned Mint32 m addr v
+  | DBWord    => storev_unaligned Mint64 m addr v
   (*if Archi.ptr64 then Mem.storev Mint64 m addr v else None *)
   end.
 

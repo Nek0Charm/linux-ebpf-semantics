@@ -303,7 +303,8 @@ Definition semantics_validation (bpf_prog: code)
                                 (sp_list: list int64) : bool :=
   (** assume some information, only for testing *)
   let fuel := 10000 %nat in (* fixed fuel *)
-  let ctx_size := 1000 %Z in (* fixed context memort size *)
+  (* test_bpf's FLAG_LARGE_MEM cases exercise accesses through offset 32760. *)
+  let ctx_size := 32768 %Z in
 
   (** initial_mem *)
   let m0 := Mem.empty in
