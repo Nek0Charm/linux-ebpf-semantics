@@ -449,11 +449,47 @@ Definition exec_jmp32 (i: imm) (rs: regset) (c_stk: cstk) (code_id: option nat) 
 Definition exec_jmp64 (o: off) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) :=
   Next (nextinstr (rs#PC <- (Val.offset_ptr (rs PC) o))) c_stk code_id tail_call_cnt m.
 
+Definition eval_cmp_static (op: cmpOp) (w: width) (r: ireg) (ri: ireg+imm) : option bool :=
+  match ri with
+  | inl src =>
+    if ireg_eqb r src then
+      match op with
+      | EQ | GE _ | LE _ => Some true
+      | NE | GT _ | LT _ => Some false
+      | SET => None
+      end
+    else None
+  | inr i =>
+    match w, op with
+    | W32, GT Signed =>
+      if Int.eq i (Int.repr Int.max_signed) then Some false else None
+    | W32, GE Signed =>
+      if Int.eq i (Int.repr Int.min_signed) then Some true else None
+    | W32, LT Signed =>
+      if Int.eq i (Int.repr Int.min_signed) then Some false else None
+    | W32, LE Signed =>
+      if Int.eq i (Int.repr Int.max_signed) then Some true else None
+    | W32, GT Unsigned => if Int.eq i Int.mone then Some false else None
+    | W32, GE Unsigned => if Int.eq i Int.zero then Some true else None
+    | W32, LT Unsigned => if Int.eq i Int.zero then Some false else None
+    | W32, LE Unsigned => if Int.eq i Int.mone then Some true else None
+    | W64, GT Unsigned => if Int.eq i Int.mone then Some false else None
+    | W64, GE Unsigned => if Int.eq i Int.zero then Some true else None
+    | W64, LT Unsigned => if Int.eq i Int.zero then Some false else None
+    | W64, LE Unsigned => if Int.eq i Int.mone then Some true else None
+    | _, _ => None
+    end
+  end.
+
 Definition exec_jmpcmp (op: cmpOp) (w: width) (r: ireg) (ri: ireg+imm) (o: off) (rs: regset) (c_stk: cstk) (code_id: option nat) (tail_call_cnt: nat) (m: mem) :=
   match
-    match w with
-    | W32 => eval_cmp32 op rs m r ri
-    | W64 => eval_cmp64 op rs m r ri
+    match eval_cmp_static op w r ri with
+    | Some cond => Some cond
+    | None =>
+      match w with
+      | W32 => eval_cmp32 op rs m r ri
+      | W64 => eval_cmp64 op rs m r ri
+      end
     end with
   | None => Stuck
   | Some cond => 
