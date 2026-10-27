@@ -3,7 +3,7 @@ From Coq Require Import ZArith List String.
 From compcert Require Import Coqlib Ctypes AST Integers.
 From compcert Require Import Maps Values Memory.
 
-From bpf.semantics Require Import ebpfSyntax ebpfState ebpfDecoder ebpfBinSem.
+From bpf.semantics Require Import ebpfSyntax ebpfState ebpfDecoder ebpfBinSem ebpfHelper.
 
 Import ListNotations.
 
@@ -21,6 +21,22 @@ Definition debug_fail_exec (err_code: nat)
 
 Definition debug_fail_decode (pc: Ptrofs.int) (raw_insn: int64) : bool := false.
 Definition debug_fail_decode_oob (pc: Ptrofs.int) : bool := false.
+
+Definition exec_helper (ins: instruction) (rs: regset) (stk: cstk)
+    (code_id: option nat) (tail_call_cnt: nat) (m: mem) (r0: int64) (m': mem): outcome :=
+  let valid :=
+    match ins with
+    | Pcall CallByStaticID id =>
+        if Int.eq id (Int.repr 7) then
+          helper_pre bpf_get_prandom_u32_spec rs m &&
+          helper_post bpf_get_prandom_u32_spec rs m (Vlong r0) m'
+        else true
+    | Pcall CallByBTF _ => true
+    | _ => false
+    end in
+  if valid then
+    Next (nextinstr (rs#R0 <- (Vlong r0))) stk code_id tail_call_cnt m
+  else Stuck.
 
 Fixpoint bpf_interpreter (fuel: nat) (bpf_prog: ebpf_prog) (st: outcome) (addr_map: list addr_region): outcome :=
   match fuel with
@@ -171,7 +187,7 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
             match ins with
             | Pcall CallByStaticID i
             | Pcall CallByBTF i =>
-            (** simulating external functions *)
+            (** checking and replaying external functions *)
               match trace with
               | [] => debug_fail_common "Trace ended before program finished"
               | h :: t =>
@@ -179,9 +195,12 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                 match List.nth_error h 0%nat with
                 | None => debug_fail_common "No R0 found in trace"
                 | Some r0 =>
-                (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
-                  bpf_interpreter_trace_check k addr_map init_sp bpf_prog t
-                    (Next (nextinstr (rs#R0 <- (Vlong r0))) stk code_id tail_call_cnt m)
+                  (* Temporally use before momory state as after memory state*)
+                  match exec_helper ins rs stk code_id tail_call_cnt m r0 m with
+                  | Stuck => debug_fail_common "Helper pre/post condition failed"
+                  | next_st =>
+                      bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
+                  end
                 end
               end
             | _ =>
