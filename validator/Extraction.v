@@ -6,6 +6,7 @@ Require Import compcert.lib.Integers.
 Require Import compcert.common.Values.
 Require Import compcert.common.Memory.
 Require Import bpf.semantics.ebpfBinSem.
+Require Import bpf.semantics.ebpfHelper.
 Require Import bpf.validator.Validation.
 
 Extraction Language OCaml.
@@ -21,4 +22,5 @@ Extract Constant debug_fail_exec => "Debug_hooks.fail_exec".
 Extract Constant debug_fail_decode => "Debug_hooks.fail_decode".
 Extract Constant debug_fail_decode_oob => "Debug_hooks.fail_decode_oob".
 
-Extraction "validator/validation.ml" semantics_validation.
+Extraction "validator/validation.ml" semantics_validation
+  semantics_validation_with_helper_check find_helper helper_validation.
