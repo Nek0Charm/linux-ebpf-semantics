@@ -11,7 +11,7 @@ From compcert Require Import Conventions Events Smallstep.
 From compcert Require Stacklayout.
 From compcert Require Import Op.
 
-From bpf.semantics Require Import GlobalSem ebpfSyntax ebpfState.
+From bpf.semantics Require Import GlobalSem ebpfSyntax ebpfState ebpfHelper.
 
 Import ListNotations.
 
@@ -59,6 +59,11 @@ Fixpoint label_pos (lbl: label) (pos: Z) (c: code) {struct c} : option Z :=
   returns a value for R0 and a new global mem *)
 Variable ebpf_call_function:
   imm -> val -> val -> val -> val -> val -> outcome -> option (val * mem).
+
+(** Resolve original static helper IDs using program/code identity and the
+    final instruction offset.  CALL immediates may already be relocated.
+    A validator must supply this mapping from checked capture metadata. *)
+Variable helper_id_at: ebpf_prog -> option nat -> Z -> option Z.
 
 
 (** Manipulations over the [PC] register: continuing with the next
@@ -666,6 +671,19 @@ Definition undef_caller_save_regs (rs: regset) : regset :=
     | _ => rs r
     end.
 
+(** Check a helper transition against its precondition and postcondition.
+    For trace validation, the caller supplies both memories in a shared
+    block layout, using the observed bytes of a single call. *)
+Inductive exec_helper (id: Z) (result: val) (rs: regset) (stk: cstk)
+    (code_id: option nat) (tail_call_cnt: nat) (m m': mem): outcome -> Prop :=
+  | exec_helper_intro: forall spec,
+      find_helper id = Some spec ->
+      helper_pre_holds spec rs m = true ->
+      helper_post_holds spec rs m result m' ->
+      exec_helper id result rs stk code_id tail_call_cnt m m'
+        (Next (nextinstr ((undef_caller_save_regs rs)#R0 <- result))
+          stk code_id tail_call_cnt m').
+
 (** Undefine all ebpf registers except caller-saved registers (i.e. R1 to R5) and R10 *)
 Definition def_caller_save_regs (rs: regset) : regset :=
   fun r =>
@@ -976,13 +994,26 @@ Inductive step (addr_map: list addr_region) (p: ebpf_prog): tls_state -> etrace 
       exec_instr p i rs stk code_id tail_call_cnt m addr_map = Next rs' stk' code_id' tail_call_cnt' m' ->
       exec_instr_event i = et ->
       step addr_map p (TLS_State rs stk code_id tail_call_cnt m) et (TLS_State rs' stk' code_id' tail_call_cnt' m')
+  | exec_step_helper:
+      forall c b ofs i id res rs stk code_id tail_call_cnt m rs' m',
+      rs PC = Vptr b ofs ->
+      (match code_id with
+       | None => Some (main_code p)
+       | Some idx => (jump_table p) idx
+       end) = Some c ->
+      find_instr (Ptrofs.unsigned ofs) c = Some (Pcall CallByStaticID i) ->
+      helper_id_at p code_id (Ptrofs.unsigned ofs) = Some id ->
+      exec_helper id res rs stk code_id tail_call_cnt m m'
+        (Next rs' stk code_id tail_call_cnt m') ->
+      step addr_map p (TLS_State rs stk code_id tail_call_cnt m) [eBPF_ext_call]
+        (TLS_State rs' stk code_id tail_call_cnt m')
   | exec_step_external:
       forall c idx b ofs cty i res rs stk code_id tail_call_cnt m rs' code_id' tail_call_cnt' m',
       rs PC = Vptr b ofs ->
       (code_id = None -> c = (main_code p)) ->
       (code_id = Some idx -> (jump_table p) idx = Some c) ->
       find_instr (Ptrofs.unsigned ofs) c = Some (Pcall cty i) ->
-      cty = CallByBTF \/ cty = CallByStaticID ->
+      cty = CallByBTF ->
       ebpf_call_function i rs#R1 rs#R2 rs#R3 rs#R4 rs#R5 (Next rs stk code_id tail_call_cnt m) = Some (res, m') -> (**r an ebpf call may invoke another ebpf program that modifies the global memory *)
       rs' = nextinstr (undef_caller_save_regs rs)
                 #R0 <- res
