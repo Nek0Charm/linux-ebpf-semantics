@@ -3,9 +3,35 @@ From Coq Require Import ZArith List String.
 From compcert Require Import Coqlib Ctypes AST Integers.
 From compcert Require Import Maps Values Memory.
 
-From bpf.semantics Require Import ebpfSyntax ebpfState ebpfDecoder ebpfBinSem.
+From bpf.semantics Require Import ebpfSyntax ebpfState ebpfDecoder ebpfBinSem ebpfHelper.
 
 Import ListNotations.
+
+(* SameMemory means reconstruction reused the entry memory. *)
+Inductive helper_post_memory :=
+  | SameMemory
+  | ObservedMemory (after: mem).
+
+(* entry is absent when only the scalar return has been decoded. *)
+Definition helper_validation (spec: helper_spec) (entry: option (regset * mem))
+    (result: val) (after: helper_post_memory) : option bool :=
+  let pre :=
+    match entry, helper_pre spec with
+    | Some (rs, m), _ => Some (helper_pre_holds spec rs m)
+    | None, None => Some true
+    | None, Some _ => None
+    end in
+  match pre with
+  | None => None
+  | Some false => Some false
+  | Some true =>
+      match helper_post spec, entry, after with
+      | NoMemoryEffect returns, _, SameMemory => Some (returns result)
+      | MemoryPost holds, Some (rs, m), ObservedMemory m' => Some (holds rs m result m')
+      | MemoryPost holds, Some (rs, m), SameMemory => Some (holds rs m result m)
+      | _, _, _ => None
+      end
+  end.
 
 Parameter force_eval : forall {A B : Type}, A -> B -> B.
 
@@ -147,7 +173,9 @@ Definition compare_trace_at_pc (rs: regset) (trace: list int64) (addr_map: list 
   compare_trace_at_pc_aux R9 rs trace addr_map &&
   compare_trace_at_pc_aux R10 rs trace addr_map.
 
-Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (init_sp: int64)  
+Fixpoint bpf_interpreter_trace_check
+  (check_helper: option nat -> Z -> list (list int64) -> bool)
+  (fuel: nat) (addr_map: list addr_region) (init_sp: int64)
   (bpf_prog: ebpf_prog) (trace: list (list int64)) (st: outcome): bool :=
   match fuel with
   | O => debug_fail_common "Fuel exhausted" (* assume we have fenouagh fuell *)
@@ -180,8 +208,10 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                 | None => debug_fail_common "No R0 found in trace"
                 | Some r0 =>
                 (** TODO: we assume the return value is Vlong, but it is possible to be a pointer *)
-                  bpf_interpreter_trace_check k addr_map init_sp bpf_prog t
+                  if check_helper code_id (Ptrofs.unsigned ofs) trace then
+                  bpf_interpreter_trace_check check_helper k addr_map init_sp bpf_prog t
                     (Next (nextinstr (rs#R0 <- (Vlong r0))) stk code_id tail_call_cnt m)
+                  else debug_fail_common "Helper event does not match the executed call"
                 end
               end
             | _ =>
@@ -205,7 +235,7 @@ Fixpoint bpf_interpreter_trace_check (fuel: nat) (addr_map: list addr_region) (i
                     | [] => debug_fail_common "Trace ended before program finished" (* (* The next instruction should be BPF_exit *) bpf_interpreter_trace_check k addr_map init_sp bpf_prog [] next_st *)
                     | h :: t => 
                       if compare_trace_at_pc rs_after h addr_map then
-                        bpf_interpreter_trace_check k addr_map init_sp bpf_prog t next_st
+                        bpf_interpreter_trace_check check_helper k addr_map init_sp bpf_prog t next_st
                       else
                         debug_fail_exec 0 ofs ins rs rs_after h addr_map
                     end
@@ -294,7 +324,9 @@ Fixpoint user_jmp_table2formal (jmp_table: list (Z * int64 * code)) : nat -> opt
     else  (user_jmp_table2formal t) i
   end.
 
-Definition semantics_validation (bpf_prog: code)
+Definition semantics_validation_with_helper_check
+                                (check_helper: option nat -> Z -> list (list int64) -> bool)
+                                (bpf_prog: code)
                                 (ctx_ptr: int64)
                                 (bpf_maps: list (Z * int64))
                                 (trace: list (list int64))
@@ -345,8 +377,14 @@ Definition semantics_validation (bpf_prog: code)
   let rs := create_initial_state ctx_blk stk_blk pc_blk in
   let init_st := (Next rs [] None 0%nat m') in (** None represents to execute the main_code *)
 
-    bpf_interpreter_trace_check fuel addr_map' r10_base 
+    bpf_interpreter_trace_check check_helper fuel addr_map' r10_base
           {|  main_code := bpf_prog;
               jump_table := user_jmp_table2formal (snd jmp_table);
               max_entries := jmp_table_max |}
           trace init_st.
+
+Definition semantics_validation (bpf_prog: code) (ctx_ptr: int64)
+    (bpf_maps: list (Z * int64)) (trace: list (list int64)) (jmp_table_max: Z)
+    (jmp_table: int64 * list (Z * int64 * code)) (sp_list: list int64): bool :=
+  semantics_validation_with_helper_check (fun _ _ _ => true)
+    bpf_prog ctx_ptr bpf_maps trace jmp_table_max jmp_table sp_list.
