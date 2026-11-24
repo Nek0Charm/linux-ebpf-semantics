@@ -977,17 +977,15 @@ Inductive step (addr_map: list addr_region) (p: ebpf_prog): tls_state -> etrace 
       exec_instr_event i = et ->
       step addr_map p (TLS_State rs stk code_id tail_call_cnt m) et (TLS_State rs' stk' code_id' tail_call_cnt' m')
   | exec_step_external:
-      forall c idx b ofs cty i res rs stk code_id tail_call_cnt m rs' code_id' tail_call_cnt' m',
+      forall c idx b ofs cty i res rs stk code_id tail_call_cnt m rs' m',
       rs PC = Vptr b ofs ->
       (code_id = None -> c = (main_code p)) ->
       (code_id = Some idx -> (jump_table p) idx = Some c) ->
       find_instr (Ptrofs.unsigned ofs) c = Some (Pcall cty i) ->
       cty = CallByBTF \/ cty = CallByStaticID ->
       ebpf_call_function i rs#R1 rs#R2 rs#R3 rs#R4 rs#R5 (Next rs stk code_id tail_call_cnt m) = Some (res, m') -> (**r an ebpf call may invoke another ebpf program that modifies the global memory *)
-      rs' = nextinstr (undef_caller_save_regs rs)
-                #R0 <- res
-                #PC <- (Val.offset_ptr (rs#PC) Ptrofs.one) ->
-      step addr_map p (TLS_State rs stk code_id tail_call_cnt m) [eBPF_ext_call] (TLS_State rs' stk code_id' tail_call_cnt' m')
+      rs' = (nextinstr (undef_caller_save_regs rs)) #R0 <- res ->
+      step addr_map p (TLS_State rs stk code_id tail_call_cnt m) [eBPF_ext_call] (TLS_State rs' stk code_id tail_call_cnt m')
       .
 
 Inductive initial_lst_state (ctx blk stk: block): tls_state -> Prop :=
