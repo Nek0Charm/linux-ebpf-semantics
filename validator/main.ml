@@ -373,12 +373,14 @@ let () =
             total_cases := !total_cases + c
           ) test_names;
           
-          Printf.printf "\nBatch validation for %s finished. Total Passed: %d / %d\n" arg !total_passed !total_cases
+          Printf.printf "\nBatch validation for %s finished. Total Passed: %d / %d\n" arg !total_passed !total_cases;
+          if !total_passed < !total_cases then exit 1
         with
-        | Sys_error msg -> Printf.printf "Error accessing directory: %s\n" msg
-        | e -> Printf.printf "An unexpected error occurred: %s\n" (Printexc.to_string e)
+        | Sys_error msg -> Printf.printf "Error accessing directory: %s\n" msg; exit 1
+        | e -> Printf.printf "An unexpected error occurred: %s\n" (Printexc.to_string e); exit 1
       end else begin
         (* Otherwise, treat the argument as a single trace filename. *)
-        let _ = run_test trace_root arg true in ()
+        let passed, total = run_test trace_root arg true in
+        if passed < total then exit 1
       end
   end
